@@ -78,22 +78,52 @@ async function extractVideoSnapshots(video) {
   let fullVideo = video
   try {
     logger.info(`Loading full video details for ${video.uuid}`)
-    fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid || video.id)
-    if (fullVideo) {
-      logger.info(`Loaded full video object with keys: ${Object.keys(fullVideo).join(', ')}`)
+    const videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid || video.id)
+    if (videoModel) {
+      logger.info(`Loaded video model with keys: ${Object.keys(videoModel).join(', ')}`)
 
-      // Log specific file-related properties
-      if (fullVideo.files) {
-        logger.info(`fullVideo.files exists with ${fullVideo.files.length} files`)
-        if (fullVideo.files.length > 0) {
-          logger.info(`First file properties: ${Object.keys(fullVideo.files[0]).join(', ')}`)
+      // Extract the actual video data from the Sequelize model
+      if (videoModel.dataValues) {
+        fullVideo = videoModel.dataValues
+        logger.info(`Video data keys: ${Object.keys(fullVideo).join(', ')}`)
+      }
+
+      // Check for VideoFiles (Sequelize association)
+      if (videoModel.VideoFiles) {
+        logger.info(`VideoFiles exists with ${videoModel.VideoFiles.length} files`)
+        if (videoModel.VideoFiles.length > 0) {
+          const firstFile = videoModel.VideoFiles[0]
+          if (firstFile.dataValues) {
+            logger.info(`First VideoFile data: ${JSON.stringify(firstFile.dataValues)}`)
+          } else {
+            logger.info(`First VideoFile keys: ${Object.keys(firstFile).join(', ')}`)
+          }
         }
+        // Add VideoFiles to fullVideo for easier access
+        fullVideo.VideoFiles = videoModel.VideoFiles
       }
-      if (fullVideo.webtorrentFiles) {
-        logger.info(`fullVideo.webtorrentFiles exists with ${fullVideo.webtorrentFiles.length} files`)
-      }
-      if (fullVideo.streamingPlaylists) {
-        logger.info(`fullVideo.streamingPlaylists exists with ${fullVideo.streamingPlaylists.length} playlists`)
+
+      // Check for VideoStreamingPlaylists (Sequelize association)
+      if (videoModel.VideoStreamingPlaylists) {
+        logger.info(`VideoStreamingPlaylists exists with ${videoModel.VideoStreamingPlaylists.length} playlists`)
+        if (videoModel.VideoStreamingPlaylists.length > 0) {
+          const firstPlaylist = videoModel.VideoStreamingPlaylists[0]
+          if (firstPlaylist.dataValues) {
+            logger.info(`First playlist data: ${JSON.stringify(firstPlaylist.dataValues)}`)
+          }
+          // Check if playlist has VideoFiles
+          if (firstPlaylist.VideoFiles) {
+            logger.info(`Playlist has ${firstPlaylist.VideoFiles.length} VideoFiles`)
+            if (firstPlaylist.VideoFiles.length > 0) {
+              const firstFile = firstPlaylist.VideoFiles[0]
+              if (firstFile.dataValues) {
+                logger.info(`First playlist file data: ${JSON.stringify(firstFile.dataValues)}`)
+              }
+            }
+          }
+        }
+        // Add to fullVideo for easier access
+        fullVideo.VideoStreamingPlaylists = videoModel.VideoStreamingPlaylists
       }
     } else {
       logger.warn(`Could not load full video details, using original video object`)
@@ -116,18 +146,63 @@ async function extractVideoSnapshots(video) {
     // Now use the full video object
     logger.info(`Searching for video file URL for ${fullVideo.uuid}`)
 
-    // Check if the full video object has file information
-    if (fullVideo.files && fullVideo.files.length > 0) {
-      logger.info(`Full video object has ${fullVideo.files.length} files`)
-      const file = fullVideo.files.find(f => f.fileUrl) || fullVideo.files[0]
-      if (file) {
-        logger.info(`File object keys: ${Object.keys(file).join(', ')}`)
-        if (file.fileUrl) {
-          videoPath = file.fileUrl
+    // Check VideoFiles from Sequelize model
+    if (fullVideo.VideoFiles && fullVideo.VideoFiles.length > 0) {
+      logger.info(`Checking ${fullVideo.VideoFiles.length} VideoFiles`)
+      for (const file of fullVideo.VideoFiles) {
+        const fileData = file.dataValues || file
+        logger.info(`VideoFile data: ${JSON.stringify(fileData)}`)
+
+        // Check for various URL properties
+        if (fileData.fileUrl) {
+          videoPath = fileData.fileUrl
           logger.info(`Found video file URL: ${videoPath}`)
-        } else if (file.fileDownloadUrl) {
-          videoPath = file.fileDownloadUrl
-          logger.info(`Found video download URL: ${videoPath}`)
+          break
+        } else if (fileData.torrentUrl) {
+          // We might be able to get the actual file URL from the torrent
+          logger.info(`File has torrentUrl but no direct fileUrl: ${fileData.torrentUrl}`)
+        }
+      }
+    }
+
+    // Check VideoStreamingPlaylists from Sequelize model
+    if (!videoPath && fullVideo.VideoStreamingPlaylists && fullVideo.VideoStreamingPlaylists.length > 0) {
+      logger.info(`Checking ${fullVideo.VideoStreamingPlaylists.length} VideoStreamingPlaylists`)
+      for (const playlist of fullVideo.VideoStreamingPlaylists) {
+        const playlistData = playlist.dataValues || playlist
+        logger.info(`StreamingPlaylist data keys: ${Object.keys(playlistData).join(', ')}`)
+
+        // Check if playlist has VideoFiles association
+        if (playlist.VideoFiles && playlist.VideoFiles.length > 0) {
+          logger.info(`Playlist has ${playlist.VideoFiles.length} VideoFiles`)
+          for (const file of playlist.VideoFiles) {
+            const fileData = file.dataValues || file
+            logger.info(`Playlist VideoFile data: ${JSON.stringify(fileData)}`)
+
+            if (fileData.fileUrl) {
+              videoPath = fileData.fileUrl
+              logger.info(`Found video URL in playlist files: ${videoPath}`)
+              break
+            }
+          }
+          if (videoPath) break
+        }
+
+        // Check for playlistUrl directly
+        if (!videoPath && playlistData.playlistUrl) {
+          videoPath = playlistData.playlistUrl
+          logger.info(`Using HLS playlist URL from StreamingPlaylist: ${videoPath}`)
+          break
+        }
+
+        // Check for segmentsSha256Url or other properties
+        if (!videoPath && playlistData.segmentsSha256Url) {
+          // Extract base URL from segments URL to construct playlist URL
+          const baseUrl = playlistData.segmentsSha256Url.replace(/\/segments-sha256\.json$/, '')
+          const possiblePlaylistUrl = `${baseUrl}/master.m3u8`
+          logger.info(`Constructed possible playlist URL: ${possiblePlaylistUrl}`)
+          videoPath = possiblePlaylistUrl
+          break
         }
       }
     }
@@ -346,7 +421,16 @@ async function getVideoTranscript(video) {
 
     // Try to load full video details which might include caption information
     try {
-      const fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+      const videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+
+      // Extract data from Sequelize model if needed
+      const fullVideo = videoModel.dataValues || videoModel
+
+      // Log the model structure for debugging
+      logger.info(`Video model keys for captions: ${Object.keys(videoModel).join(', ')}`)
+      if (fullVideo !== videoModel) {
+        logger.info(`Video dataValues keys: ${Object.keys(fullVideo).join(', ')}`)
+      }
 
       // Check if video has captions property
       if (fullVideo.captions || fullVideo.videoCaptions) {
@@ -360,6 +444,22 @@ async function getVideoTranscript(video) {
         if (caption) {
           captionUrl = caption.captionPath || caption.fileUrl || caption.url
           logger.info(`Found caption URL: ${captionUrl}`)
+        }
+      }
+
+      // Check for VideoCaptions association (Sequelize)
+      if (!captionUrl && videoModel.VideoCaptions) {
+        logger.info(`Found VideoCaptions association with ${videoModel.VideoCaptions.length} captions`)
+        for (const caption of videoModel.VideoCaptions) {
+          const captionData = caption.dataValues || caption
+          logger.info(`Caption data: ${JSON.stringify(captionData)}`)
+
+          // Try to find the caption URL
+          if (captionData.fileUrl || captionData.captionPath) {
+            captionUrl = captionData.fileUrl || captionData.captionPath
+            logger.info(`Found caption URL from VideoCaptions: ${captionUrl}`)
+            break
+          }
         }
       }
 
