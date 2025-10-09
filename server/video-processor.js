@@ -2,6 +2,7 @@ const ffmpeg = require('fluent-ffmpeg')
 const fs = require('fs').promises
 const path = require('path')
 const openaiService = require('./openai-service')
+const databaseService = require('./database-service')
 
 let logger = null
 let settingsManager = null
@@ -15,16 +16,8 @@ function initialize(services) {
 
 async function queueVideoForProcessing(video) {
   try {
-    const sequelize = peertubeHelpers.database.sequelize
-
-    // Add to processing queue
-    await sequelize.query(`
-      INSERT INTO plugin_ai_processing_queue (video_id, video_uuid, status)
-      VALUES ($1, $2, 'pending')
-      ON CONFLICT (video_uuid) DO NOTHING;
-    `, {
-      bind: [video.id, video.uuid]
-    })
+    // Add to processing queue using database service
+    await databaseService.addToProcessingQueue(video.uuid, video.id)
 
     // Start processing in background
     processVideo(video).catch(err => {
@@ -37,19 +30,11 @@ async function queueVideoForProcessing(video) {
 }
 
 async function processVideo(video) {
-  const sequelize = peertubeHelpers.database.sequelize
-
   try {
     logger.info(`Starting processing for video ${video.uuid}`)
 
     // Update status to processing
-    await sequelize.query(`
-      UPDATE plugin_ai_processing_queue
-      SET status = 'processing'
-      WHERE video_uuid = $1;
-    `, {
-      bind: [video.uuid]
-    })
+    await databaseService.updateProcessingStatus(video.uuid, 'processing')
 
     // Process snapshots
     await extractVideoSnapshots(video)
@@ -61,24 +46,12 @@ async function processVideo(video) {
     await generateVideoEmbeddings(video)
 
     // Update status to completed
-    await sequelize.query(`
-      UPDATE plugin_ai_processing_queue
-      SET status = 'completed', processed_at = CURRENT_TIMESTAMP
-      WHERE video_uuid = $1;
-    `, {
-      bind: [video.uuid]
-    })
+    await databaseService.updateProcessingStatus(video.uuid, 'completed')
 
     logger.info(`Successfully processed video ${video.uuid}`)
   } catch (error) {
     // Update status to error
-    await sequelize.query(`
-      UPDATE plugin_ai_processing_queue
-      SET status = 'error', error_message = $2
-      WHERE video_uuid = $1;
-    `, {
-      bind: [video.uuid, error.message]
-    })
+    await databaseService.updateProcessingStatus(video.uuid, 'error', error.message)
 
     logger.error(`Failed to process video ${video.uuid}:`, error)
     throw error
@@ -114,7 +87,16 @@ async function extractVideoSnapshots(video) {
     if (videoFiles && videoFiles.length > 0) {
       videoPath = videoFiles[0].path
     } else {
-      throw new Error('No video files found')
+      // Try alternative approach - look for the file directly
+      const videosPath = '/var/www/peertube/storage/videos'
+      const possiblePath = path.join(videosPath, `${video.uuid}-720.mp4`)
+
+      try {
+        await fs.access(possiblePath)
+        videoPath = possiblePath
+      } catch {
+        throw new Error('No video files found')
+      }
     }
   } catch (error) {
     logger.error('Could not get video file path:', error)
@@ -123,7 +105,6 @@ async function extractVideoSnapshots(video) {
 
   const duration = video.duration
   const snapshots = []
-  const sequelize = peertubeHelpers.database.sequelize
 
   // Extract snapshots at intervals
   for (let timestamp = 0; timestamp < duration; timestamp += interval) {
@@ -142,14 +123,7 @@ async function extractVideoSnapshots(video) {
       })
 
       // Store snapshot reference in database
-      await sequelize.query(`
-        INSERT INTO plugin_ai_video_snapshots (video_id, video_uuid, timestamp, file_path)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (video_uuid, timestamp) DO UPDATE
-        SET file_path = $4;
-      `, {
-        bind: [video.id, video.uuid, timestamp, outputPath]
-      })
+      await databaseService.saveVideoSnapshot(video.uuid, video.id, timestamp, outputPath, null)
 
       snapshots.push({ timestamp, path: outputPath })
       logger.debug(`Extracted snapshot at ${timestamp}s for video ${video.uuid}`)
@@ -167,8 +141,6 @@ async function extractVideoSnapshots(video) {
 }
 
 async function analyzeSnapshots(video, snapshots) {
-  const sequelize = peertubeHelpers.database.sequelize
-
   for (const snapshot of snapshots) {
     try {
       // Read image and convert to base64
@@ -179,13 +151,7 @@ async function analyzeSnapshots(video, snapshots) {
       const description = await openaiService.analyzeImage(base64Image)
 
       // Update snapshot with description
-      await sequelize.query(`
-        UPDATE plugin_ai_video_snapshots
-        SET description = $3
-        WHERE video_uuid = $1 AND timestamp = $2;
-      `, {
-        bind: [video.uuid, snapshot.timestamp, description]
-      })
+      await databaseService.saveVideoSnapshot(video.uuid, video.id, snapshot.timestamp, snapshot.path, description)
 
       logger.debug(`Analyzed snapshot at ${snapshot.timestamp}s`)
     } catch (error) {
@@ -195,11 +161,8 @@ async function analyzeSnapshots(video, snapshots) {
 }
 
 async function processVideoTranscript(video) {
-  const sequelize = peertubeHelpers.database.sequelize
-
   try {
     // Get video captions/transcripts
-    // This needs to be adapted based on actual PeerTube API
     const transcriptData = await getVideoTranscript(video)
 
     if (!transcriptData) {
@@ -212,21 +175,11 @@ async function processVideoTranscript(video) {
 
     // Store chunks in database
     for (const chunk of chunks) {
-      await sequelize.query(`
-        INSERT INTO plugin_ai_video_embeddings
-        (video_id, video_uuid, chunk_index, start_time, end_time, content)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (video_uuid, chunk_index) DO UPDATE
-        SET content = $6, start_time = $4, end_time = $5;
-      `, {
-        bind: [
-          video.id,
-          video.uuid,
-          chunk.index,
-          chunk.startTime,
-          chunk.endTime,
-          chunk.content
-        ]
+      await databaseService.saveVideoEmbedding(video.uuid, video.id, chunk.index, {
+        startTime: chunk.startTime,
+        endTime: chunk.endTime,
+        content: chunk.content,
+        embedding: null // Will be generated later
       })
     }
 
@@ -238,26 +191,28 @@ async function processVideoTranscript(video) {
 
 async function getVideoTranscript(video) {
   // This function needs to be implemented based on PeerTube's actual transcript API
-  // For now, returning null as a placeholder
   try {
-    // Check if video has captions
-    const sequelize = peertubeHelpers.database.sequelize
-    const [captions] = await sequelize.query(`
-      SELECT * FROM "videoCaption"
-      WHERE "videoId" = $1
-      ORDER BY "language" ASC
-      LIMIT 1;
-    `, {
-      bind: [video.id]
-    })
+    // Check if video has captions using PeerTube's helpers or direct file access
+    // For now, trying to find caption files in standard locations
+    const dataPath = peertubeHelpers.plugin.getDataDirectoryPath()
+    const captionsPath = path.join('/var/www/peertube/storage/captions')
 
-    if (captions && captions.length > 0) {
-      const captionPath = captions[0].fileUrl || captions[0].path
-      if (captionPath) {
-        const content = await fs.readFile(captionPath, 'utf-8')
+    // Try to find VTT file for this video
+    const possibleFiles = [
+      path.join(captionsPath, `${video.uuid}-en.vtt`),
+      path.join(captionsPath, `${video.uuid}.vtt`)
+    ]
+
+    for (const filePath of possibleFiles) {
+      try {
+        const content = await fs.readFile(filePath, 'utf-8')
         return content
+      } catch {
+        // File doesn't exist, try next
       }
     }
+
+    logger.info(`No caption files found for video ${video.uuid}`)
   } catch (error) {
     logger.error('Error getting video transcript:', error)
   }
@@ -328,35 +283,30 @@ async function generateVideoEmbeddings(video) {
     return
   }
 
-  const sequelize = peertubeHelpers.database.sequelize
-
   // Get all text chunks that need embeddings
-  const [chunks] = await sequelize.query(`
-    SELECT id, chunk_index, content, start_time, end_time
-    FROM plugin_ai_video_embeddings
-    WHERE video_uuid = $1 AND embedding IS NULL
-    ORDER BY chunk_index;
-  `, {
-    bind: [video.uuid]
-  })
+  const chunks = await databaseService.getVideoEmbeddings(video.uuid)
 
   for (const chunk of chunks) {
     try {
+      // Skip if embedding already exists
+      if (chunk.embedding && chunk.embedding.length > 0) {
+        continue
+      }
+
       // Generate embedding
       const embedding = await openaiService.generateEmbedding(chunk.content)
 
       // Store embedding
-      await sequelize.query(`
-        UPDATE plugin_ai_video_embeddings
-        SET embedding = $2::vector
-        WHERE id = $1;
-      `, {
-        bind: [chunk.id, `[${embedding.join(',')}]`]
+      await databaseService.saveVideoEmbedding(video.uuid, video.id, chunk.chunkIndex, {
+        startTime: chunk.startTime,
+        endTime: chunk.endTime,
+        content: chunk.content,
+        embedding: embedding
       })
 
-      logger.debug(`Generated embedding for chunk ${chunk.chunk_index}`)
+      logger.debug(`Generated embedding for chunk ${chunk.chunkIndex}`)
     } catch (error) {
-      logger.error(`Failed to generate embedding for chunk ${chunk.id}:`, error)
+      logger.error(`Failed to generate embedding for chunk ${chunk.chunkIndex}:`, error)
     }
   }
 
@@ -365,37 +315,21 @@ async function generateVideoEmbeddings(video) {
 
 async function checkAndProcessTranscript(video) {
   // Check if transcript is now available and process if needed
-  const sequelize = peertubeHelpers.database.sequelize
+  const embeddings = await databaseService.getVideoEmbeddings(video.uuid)
 
-  const [[result]] = await sequelize.query(`
-    SELECT COUNT(*) as count
-    FROM plugin_ai_video_embeddings
-    WHERE video_uuid = $1;
-  `, {
-    bind: [video.uuid]
-  })
-
-  if (parseInt(result.count) === 0) {
+  if (!embeddings || embeddings.length === 0) {
     await processVideoTranscript(video)
     await generateVideoEmbeddings(video)
   }
 }
 
 async function cleanupVideoData(video) {
-  const sequelize = peertubeHelpers.database.sequelize
   const dataPath = peertubeHelpers.plugin.getDataDirectoryPath()
   const snapshotsDir = path.join(dataPath, 'snapshots', video.uuid)
 
   try {
     // Delete from database
-    await sequelize.query(`
-      DELETE FROM plugin_ai_video_embeddings WHERE video_uuid = $1;
-      DELETE FROM plugin_ai_video_snapshots WHERE video_uuid = $1;
-      DELETE FROM plugin_ai_chat_sessions WHERE video_id = $2;
-      DELETE FROM plugin_ai_processing_queue WHERE video_uuid = $1;
-    `, {
-      bind: [video.uuid, video.id]
-    })
+    await databaseService.cleanupVideoData(video.uuid)
 
     // Delete snapshot files
     await fs.rm(snapshotsDir, { recursive: true, force: true })
@@ -407,17 +341,7 @@ async function cleanupVideoData(video) {
 }
 
 async function getProcessingStatus(videoUuid) {
-  const sequelize = peertubeHelpers.database.sequelize
-
-  const [[status]] = await sequelize.query(`
-    SELECT status, error_message, processed_at
-    FROM plugin_ai_processing_queue
-    WHERE video_uuid = $1;
-  `, {
-    bind: [videoUuid]
-  })
-
-  return status || { status: 'not_processed' }
+  return await databaseService.getProcessingStatus(videoUuid)
 }
 
 module.exports = {

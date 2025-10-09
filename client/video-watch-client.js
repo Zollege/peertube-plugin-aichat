@@ -58,13 +58,12 @@ async function addProcessButton(video, peertubeHelpers) {
     attempts++
     console.log(`[AI Chat] Attempt ${attempts} to find dropdown...`)
 
-    // Try multiple selectors for the dropdown button - PeerTube v5+ uses my-action-dropdown
-    const dropdownButton = document.querySelector('my-action-dropdown .action-button-more') ||
-                          document.querySelector('.action-dropdown .dropdown-toggle') ||
-                          document.querySelector('[title="More actions"]') ||
-                          document.querySelector('.video-actions my-action-dropdown button') ||
-                          document.querySelector('.action-button-more') ||
-                          document.querySelector('my-video-actions-dropdown button')
+    // Look for the correct dropdown button with ngbdropdowntoggle and more-horizontal icon
+    const dropdownButton = document.querySelector('button[ngbdropdowntoggle][aria-label="Open actions"]') ||
+                          document.querySelector('button[ngbdropdowntoggle] my-global-icon[iconname="more-horizontal"]')?.parentElement ||
+                          document.querySelector('button.dropdown-toggle.action-button[ngbdropdowntoggle]') ||
+                          document.querySelector('button[ngbdropdowntoggle].action-button') ||
+                          document.querySelector('.action-button.dropdown-toggle[ngbdropdowntoggle]')
 
     if (dropdownButton) {
       console.log('[AI Chat] Found dropdown button:', dropdownButton)
@@ -75,10 +74,12 @@ async function addProcessButton(video, peertubeHelpers) {
         console.log('[AI Chat] Dropdown clicked, waiting for menu...')
 
         setTimeout(() => {
-          // Find the dropdown menu
-          const dropdownMenu = document.querySelector('.dropdown-menu.show') ||
-                              document.querySelector('.dropdown-menu[aria-expanded="true"]') ||
-                              document.querySelector('.video-actions .dropdown-menu')
+          // Find the dropdown menu - look for the menu that appears after clicking
+          const dropdownMenu = document.querySelector('div[ngbdropdownmenu]') ||
+                              document.querySelector('.dropdown-menu.show') ||
+                              document.querySelector('[role="menu"].dropdown-menu') ||
+                              document.querySelector('button[ngbdropdowntoggle] + div.dropdown-menu') ||
+                              document.querySelector('.dropdown-menu:not([hidden])')
 
           if (dropdownMenu && !dropdownMenu.querySelector('.ai-chat-process-btn')) {
             console.log('[AI Chat] Adding process button to menu')
