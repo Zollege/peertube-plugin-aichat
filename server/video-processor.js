@@ -168,13 +168,35 @@ async function extractVideoSnapshots(video) {
             const reloadedVideo = await peertubeHelpers.videos.loadByIdOrUUID(videoId)
             if (reloadedVideo) {
               logger.info(`Reloaded video has files: VideoFiles=${!!reloadedVideo.VideoFiles}, StreamingPlaylists=${!!reloadedVideo.VideoStreamingPlaylists}`)
+
+              // Update the videoModel reference with the reloaded data
+              videoModel = reloadedVideo
+
               if (reloadedVideo.VideoFiles && reloadedVideo.VideoFiles.length > 0) {
                 fullVideo.VideoFiles = reloadedVideo.VideoFiles
                 logger.info(`Added ${reloadedVideo.VideoFiles.length} VideoFiles from reload`)
+
+                // Log the actual file data
+                const firstFile = reloadedVideo.VideoFiles[0]
+                const fileData = firstFile.dataValues || firstFile
+                logger.info(`Reloaded VideoFile data: ${JSON.stringify(fileData)}`)
               }
               if (reloadedVideo.VideoStreamingPlaylists && reloadedVideo.VideoStreamingPlaylists.length > 0) {
                 fullVideo.VideoStreamingPlaylists = reloadedVideo.VideoStreamingPlaylists
                 logger.info(`Added ${reloadedVideo.VideoStreamingPlaylists.length} StreamingPlaylists from reload`)
+
+                // Log the actual playlist data
+                const firstPlaylist = reloadedVideo.VideoStreamingPlaylists[0]
+                const playlistData = firstPlaylist.dataValues || firstPlaylist
+                logger.info(`Reloaded Playlist data: ${JSON.stringify(playlistData)}`)
+
+                // Check for nested VideoFiles in playlists
+                if (firstPlaylist.VideoFiles && firstPlaylist.VideoFiles.length > 0) {
+                  logger.info(`Playlist has ${firstPlaylist.VideoFiles.length} nested VideoFiles`)
+                  const firstNestedFile = firstPlaylist.VideoFiles[0]
+                  const nestedFileData = firstNestedFile.dataValues || firstNestedFile
+                  logger.info(`Nested VideoFile data: ${JSON.stringify(nestedFileData)}`)
+                }
               }
             }
           }
@@ -203,10 +225,11 @@ async function extractVideoSnapshots(video) {
     // Now use the full video object
     logger.info(`Searching for video file URL for ${fullVideo.uuid}`)
 
-    // Check VideoFiles from Sequelize model
-    if (fullVideo.VideoFiles && fullVideo.VideoFiles.length > 0) {
-      logger.info(`Checking ${fullVideo.VideoFiles.length} VideoFiles`)
-      for (const file of fullVideo.VideoFiles) {
+    // Check VideoFiles from Sequelize model - check both original and reloaded data
+    const videoFilesToCheck = fullVideo.VideoFiles || []
+    if (videoFilesToCheck.length > 0) {
+      logger.info(`Checking ${videoFilesToCheck.length} VideoFiles for URLs`)
+      for (const file of videoFilesToCheck) {
         const fileData = file.dataValues || file
         logger.info(`VideoFile data: ${JSON.stringify(fileData)}`)
 
@@ -225,6 +248,8 @@ async function extractVideoSnapshots(video) {
           logger.info(`File has torrentUrl but no direct fileUrl: ${fileData.torrentUrl}`)
         }
       }
+    } else {
+      logger.info('No VideoFiles to check for URLs')
     }
 
     // Check VideoStreamingPlaylists from Sequelize model
