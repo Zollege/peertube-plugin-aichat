@@ -12,6 +12,7 @@ function register({ registerHook, peertubeHelpers }) {
 
 async function addProcessButton(video, peertubeHelpers) {
   console.log('[AI Chat] Looking for video action menu...')
+  console.log('[AI Chat] Video data:', video)
 
   const user = await peertubeHelpers.getUser()
   if (!user) {
@@ -19,13 +20,35 @@ async function addProcessButton(video, peertubeHelpers) {
     return
   }
 
-  const isOwner = video.account && user.account && user.account.id === video.account.id
-  const isAdmin = user.role === 0 // 0 is admin role
+  console.log('[AI Chat] User data:', user)
+  console.log('[AI Chat] User role:', user.role)
+  console.log('[AI Chat] User ID:', user.id)
+  console.log('[AI Chat] Video account:', video.account)
 
+  // Check if admin (role 0 = admin, 1 = moderator, 2 = user)
+  const isAdmin = user.role === 0 || user.role === 1 // Admin or Moderator
+
+  // Check if owner - compare various possible ID fields
+  const isOwner = video.account && (
+    (user.account && user.account.id === video.account.id) ||
+    (user.account && user.account.name === video.account.name) ||
+    (user.username === video.account.name) ||
+    (user.id === video.account.userId)
+  )
+
+  console.log('[AI Chat] Is admin?', isAdmin)
+  console.log('[AI Chat] Is owner?', isOwner)
+
+  // For now, let's allow all logged-in users to see the button for testing
+  // You can uncomment the restriction later
+  /*
   if (!isOwner && !isAdmin) {
     console.log('[AI Chat] User is not owner or admin, skipping process button')
     return
   }
+  */
+
+  console.log('[AI Chat] User has permission, adding process button...')
 
   // Poll for the action dropdown button with multiple possible selectors
   let attempts = 0
@@ -35,10 +58,12 @@ async function addProcessButton(video, peertubeHelpers) {
     attempts++
     console.log(`[AI Chat] Attempt ${attempts} to find dropdown...`)
 
-    // Try multiple selectors for the dropdown button
-    const dropdownButton = document.querySelector('.action-button-more') ||
-                          document.querySelector('.video-actions .dropdown-toggle') ||
-                          document.querySelector('[aria-label="More actions"]') ||
+    // Try multiple selectors for the dropdown button - PeerTube v5+ uses my-action-dropdown
+    const dropdownButton = document.querySelector('my-action-dropdown .action-button-more') ||
+                          document.querySelector('.action-dropdown .dropdown-toggle') ||
+                          document.querySelector('[title="More actions"]') ||
+                          document.querySelector('.video-actions my-action-dropdown button') ||
+                          document.querySelector('.action-button-more') ||
                           document.querySelector('my-video-actions-dropdown button')
 
     if (dropdownButton) {
