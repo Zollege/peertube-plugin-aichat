@@ -159,6 +159,90 @@ async function registerSettings(registerSetting) {
 snapshots, and metadata. When answering questions, reference specific timestamps when relevant.
 Be concise but informative. If you mention a specific moment, include the timestamp in format [0:00].`
   })
+
+  // Object Storage CDN URLs
+  registerSetting({
+    name: 'spaces-streaming-url',
+    label: 'Spaces/S3 Streaming CDN URL',
+    type: 'input',
+    descriptionHTML: 'Base URL for streaming videos on object storage (e.g., https://peertube-streaming-1.nyc3.cdn.digitaloceanspaces.com)',
+    private: false,
+    default: ''
+  })
+
+  registerSetting({
+    name: 'spaces-videos-url',
+    label: 'Spaces/S3 Videos CDN URL',
+    type: 'input',
+    descriptionHTML: 'Base URL for regular videos on object storage (e.g., https://peertube-videos-1.nyc3.cdn.digitaloceanspaces.com)',
+    private: false,
+    default: ''
+  })
+
+  registerSetting({
+    name: 'spaces-captions-url',
+    label: 'Spaces/S3 Captions CDN URL',
+    type: 'input',
+    descriptionHTML: 'Base URL for captions on object storage (e.g., https://peertube-captions.nyc3.cdn.digitaloceanspaces.com)',
+    private: false,
+    default: ''
+  })
+
+  // S3/Spaces Access Credentials (for private videos)
+  registerSetting({
+    name: 'spaces-access-key',
+    label: 'Spaces/S3 Access Key ID',
+    type: 'input-password',
+    descriptionHTML: 'Access Key ID for DigitalOcean Spaces or S3 (required for private videos)',
+    private: true,
+    default: ''
+  })
+
+  registerSetting({
+    name: 'spaces-secret-key',
+    label: 'Spaces/S3 Secret Access Key',
+    type: 'input-password',
+    descriptionHTML: 'Secret Access Key for DigitalOcean Spaces or S3 (required for private videos)',
+    private: true,
+    default: ''
+  })
+
+  registerSetting({
+    name: 'spaces-region',
+    label: 'Spaces/S3 Region',
+    type: 'input',
+    descriptionHTML: 'Region for DigitalOcean Spaces or S3 (e.g., nyc3, us-east-1)',
+    private: false,
+    default: 'nyc3'
+  })
+
+  // Object Storage Prefixes (if using subdirectories)
+  registerSetting({
+    name: 'spaces-streaming-prefix',
+    label: 'Streaming Prefix/Subdirectory',
+    type: 'input',
+    descriptionHTML: 'Prefix/subdirectory for streaming files (e.g., playlists)',
+    private: false,
+    default: ''
+  })
+
+  registerSetting({
+    name: 'spaces-videos-prefix',
+    label: 'Videos Prefix/Subdirectory',
+    type: 'input',
+    descriptionHTML: 'Prefix/subdirectory for video files (e.g., web-videos)',
+    private: false,
+    default: ''
+  })
+
+  registerSetting({
+    name: 'spaces-captions-prefix',
+    label: 'Captions Prefix/Subdirectory',
+    type: 'input',
+    descriptionHTML: 'Prefix/subdirectory for caption files (e.g., captions)',
+    private: false,
+    default: ''
+  })
 }
 
 function registerVideoHooks(registerHook) {

@@ -3,6 +3,7 @@ const fs = require('fs').promises
 const path = require('path')
 const openaiService = require('./openai-service')
 const databaseService = require('./database-service')
+const spacesService = require('./spaces-service')
 
 let logger = null
 let settingsManager = null
@@ -12,6 +13,18 @@ function initialize(services) {
   logger = services.logger
   settingsManager = services.settingsManager
   peertubeHelpers = services.peertubeHelpers
+
+  // Initialize spaces service
+  spacesService.initialize(services)
+
+  // Log available helpers for debugging
+  if (peertubeHelpers) {
+    logger.info('Available PeerTube helpers:')
+    logger.info(`- videos: ${Object.keys(peertubeHelpers.videos || {}).join(', ')}`)
+    logger.info(`- database: ${!!peertubeHelpers.database}`)
+    logger.info(`- config: ${Object.keys(peertubeHelpers.config || {}).join(', ')}`)
+    logger.info(`- plugin: ${Object.keys(peertubeHelpers.plugin || {}).join(', ')}`)
+  }
 }
 
 async function queueVideoForProcessing(video) {
@@ -76,6 +89,11 @@ async function extractVideoSnapshots(video) {
   // IMPORTANT: First, try to load the complete video object
   // The video object passed to hooks might be minimal
   let fullVideo = video
+
+  // Log video privacy level for debugging, but we'll handle all videos the same way
+  if (video.privacy) {
+    logger.info(`Video privacy level: ${video.privacy}`)
+  }
   try {
     logger.info(`Loading full video details for ${video.uuid}`)
 
@@ -193,9 +211,14 @@ async function extractVideoSnapshots(video) {
         logger.info(`VideoFile data: ${JSON.stringify(fileData)}`)
 
         // Check for various URL properties
+        // Note: fileUrl might be a signed URL for private videos
         if (fileData.fileUrl) {
           videoPath = fileData.fileUrl
           logger.info(`Found video file URL: ${videoPath}`)
+          // Check if it's a signed URL
+          if (videoPath.includes('X-Amz-Signature') || videoPath.includes('signature=')) {
+            logger.info('URL appears to be signed/authenticated')
+          }
           break
         } else if (fileData.torrentUrl) {
           // We might be able to get the actual file URL from the torrent
@@ -267,70 +290,224 @@ async function extractVideoSnapshots(video) {
       }
     }
 
-    // Approach 1b: Try to make an API request to get video details
-    if (!videoPath && fullVideo.uuid) {
+    // Approach 1b: Try server-side access to get complete video data
+    if (!videoPath) {
       try {
-        logger.info('Attempting to fetch video details via API')
-        // Build the API URL - this is a common PeerTube API endpoint
-        const apiBase = peertubeHelpers.config?.getWebserverUrl?.() || ''
-        if (apiBase) {
-          const apiUrl = `${apiBase}/api/v1/videos/${fullVideo.uuid}`
-          logger.info(`Fetching video from API: ${apiUrl}`)
+        logger.info('Attempting server-side video data access')
 
-          // Use Node's built-in https module
-          const https = require('https')
-          const http = require('http')
+        // Method 1: Try to use PeerTube's internal video getter if available
+        if (peertubeHelpers.videos?.get) {
+          const completeVideo = await peertubeHelpers.videos.get(fullVideo.id)
+          if (completeVideo) {
+            logger.info(`Got complete video with keys: ${Object.keys(completeVideo).join(', ')}`)
 
-          const videoData = await new Promise((resolve, reject) => {
-            const client = apiUrl.startsWith('https') ? https : http
-
-            client.get(apiUrl, (res) => {
-              let data = ''
-              res.on('data', chunk => data += chunk)
-              res.on('end', () => {
-                try {
-                  resolve(JSON.parse(data))
-                } catch (e) {
-                  reject(e)
-                }
-              })
-              res.on('error', reject)
-            }).on('error', reject)
-          })
-
-          if (videoData) {
-            logger.info(`API response has properties: ${Object.keys(videoData).join(', ')}`)
-
-            // Check for files in API response
-            if (videoData.files && videoData.files.length > 0) {
-              logger.info(`API returned ${videoData.files.length} files`)
-              const file = videoData.files[0]
-              logger.info(`API file data: ${JSON.stringify(file)}`)
-              if (file.fileUrl) {
-                videoPath = file.fileUrl
-                logger.info(`Found video URL from API: ${videoPath}`)
+            if (completeVideo.VideoFiles && completeVideo.VideoFiles.length > 0) {
+              logger.info(`Complete video has ${completeVideo.VideoFiles.length} VideoFiles`)
+              const file = completeVideo.VideoFiles[0]
+              const fileData = file.dataValues || file
+              logger.info(`Complete video file data: ${JSON.stringify(fileData)}`)
+              if (fileData.fileUrl) {
+                videoPath = fileData.fileUrl
+                logger.info(`Found video URL from complete video: ${videoPath}`)
               }
             }
 
-            // Check for streaming playlists in API response
-            if (!videoPath && videoData.streamingPlaylists && videoData.streamingPlaylists.length > 0) {
-              const playlist = videoData.streamingPlaylists[0]
-              logger.info(`API playlist data: ${JSON.stringify(playlist)}`)
-              if (playlist.playlistUrl) {
-                videoPath = playlist.playlistUrl
-                logger.info(`Found playlist URL from API: ${videoPath}`)
-              } else if (playlist.files && playlist.files.length > 0) {
-                const file = playlist.files[0]
-                if (file.fileUrl) {
-                  videoPath = file.fileUrl
-                  logger.info(`Found file URL from API playlist: ${videoPath}`)
-                }
+            if (!videoPath && completeVideo.VideoStreamingPlaylists && completeVideo.VideoStreamingPlaylists.length > 0) {
+              const playlist = completeVideo.VideoStreamingPlaylists[0]
+              const playlistData = playlist.dataValues || playlist
+              if (playlistData.playlistUrl) {
+                videoPath = playlistData.playlistUrl
+                logger.info(`Found playlist URL from complete video: ${videoPath}`)
               }
             }
           }
         }
+
+        // Method 2: Try to access video files table directly if we have database access
+        if (!videoPath && peertubeHelpers.database?.query) {
+          logger.info('Attempting direct database query for video files')
+
+          // Query for video files
+          const fileQuery = `
+            SELECT * FROM "videoFile"
+            WHERE "videoId" = $1
+            ORDER BY "resolution" DESC
+            LIMIT 1
+          `
+          const fileResults = await peertubeHelpers.database.query(fileQuery, [fullVideo.id])
+
+          if (fileResults && fileResults.length > 0) {
+            const file = fileResults[0]
+            logger.info(`Database file record: ${JSON.stringify(file)}`)
+            if (file.fileUrl) {
+              videoPath = file.fileUrl
+              logger.info(`Found video URL from database: ${videoPath}`)
+            }
+          }
+
+          // Query for streaming playlists if no file found
+          if (!videoPath) {
+            const playlistQuery = `
+              SELECT * FROM "videoStreamingPlaylist"
+              WHERE "videoId" = $1
+              LIMIT 1
+            `
+            const playlistResults = await peertubeHelpers.database.query(playlistQuery, [fullVideo.id])
+
+            if (playlistResults && playlistResults.length > 0) {
+              const playlist = playlistResults[0]
+              logger.info(`Database playlist record: ${JSON.stringify(playlist)}`)
+              if (playlist.playlistUrl) {
+                videoPath = playlist.playlistUrl
+                logger.info(`Found playlist URL from database: ${videoPath}`)
+              }
+            }
+          }
+        }
+
+        // Method 3: Check video object for URL patterns
+        if (!videoPath && fullVideo.url) {
+          // The video.url might contain the ActivityPub URL
+          // We can try to construct the file URL from it
+          logger.info(`Video has URL property: ${fullVideo.url}`)
+
+          // If it's an ActivityPub URL, we might be able to construct file URLs
+          if (fullVideo.url.includes('/videos/watch/')) {
+            const baseUrl = fullVideo.url.split('/videos/watch/')[0]
+
+            // Try common file URL patterns
+            const possibleUrls = [
+              `${baseUrl}/static/webseed/${fullVideo.uuid}-720.mp4`,
+              `${baseUrl}/static/webseed/${fullVideo.uuid}-480.mp4`,
+              `${baseUrl}/static/webseed/${fullVideo.uuid}-360.mp4`,
+              `${baseUrl}/static/streaming-playlists/hls/${fullVideo.uuid}/master.m3u8`
+            ]
+
+            logger.info(`Constructed possible URLs from video.url: ${possibleUrls.join(', ')}`)
+
+            // We'll use the first one as a guess
+            videoPath = possibleUrls[0]
+            logger.info(`Using constructed URL: ${videoPath}`)
+          }
+        }
+
+        // Method 4: Check if video state indicates processing
+        if (!videoPath && fullVideo.state) {
+          logger.info(`Video state: ${fullVideo.state}`)
+          if (fullVideo.state !== 1) { // 1 = published
+            logger.warn(`Video is not in published state (state=${fullVideo.state}), files may not be available yet`)
+          }
+        }
+
+        // Method 5: Try to generate signed URLs for any video (public or private)
+        if (!videoPath) {
+          logger.info('Attempting to generate signed URL for video access')
+
+          // Get configured CDN URLs from settings
+          const spacesStreamingUrl = await settingsManager.getSetting('spaces-streaming-url')
+          const spacesVideosUrl = await settingsManager.getSetting('spaces-videos-url')
+          const accessKey = await settingsManager.getSetting('spaces-access-key')
+          const secretKey = await settingsManager.getSetting('spaces-secret-key')
+
+          // If we have credentials, always use signed URLs for consistency
+          if (accessKey && secretKey) {
+            if (spacesStreamingUrl) {
+              // Generate signed URL for video (works for both public and private)
+              const signedUrl = await spacesService.getSignedVideoUrl(fullVideo.uuid, spacesStreamingUrl, true)
+              if (signedUrl) {
+                videoPath = signedUrl
+                logger.info(`Generated signed URL for video: ${fullVideo.uuid}`)
+              }
+            } else if (spacesVideosUrl) {
+              // Try regular videos URL
+              const signedUrl = await spacesService.getSignedVideoUrl(fullVideo.uuid, spacesVideosUrl, false)
+              if (signedUrl) {
+                videoPath = signedUrl
+                logger.info(`Generated signed URL for video from videos URL: ${fullVideo.uuid}`)
+              }
+            }
+
+            if (!videoPath) {
+              logger.warn('Could not generate signed URL - check S3/Spaces configuration')
+            }
+          } else {
+            // No credentials - try direct URLs (will only work for public videos)
+            logger.info('No S3/Spaces credentials configured - using direct URLs')
+
+            if (spacesStreamingUrl) {
+              videoPath = `${spacesStreamingUrl}/${fullVideo.uuid}-master.m3u8`
+              logger.info(`Using direct URL (public videos only): ${videoPath}`)
+            } else if (spacesVideosUrl) {
+              videoPath = `${spacesVideosUrl}/${fullVideo.uuid}-720.mp4`
+              logger.info(`Using direct video URL (public videos only): ${videoPath}`)
+            }
+          }
+        }
+
+        if (!videoPath) {
+          // Also check environment variables as fallback
+          const envBases = [
+            process.env.OBJECT_STORAGE_BASE_URL,
+            process.env.S3_BASE_URL,
+            process.env.SPACES_BASE_URL,
+            process.env.PEERTUBE_OBJECT_STORAGE_STREAMING_BASE_URL,
+            process.env.PEERTUBE_OBJECT_STORAGE_VIDEOS_BASE_URL
+          ].filter(Boolean)
+
+          // Combine all possible bases (prioritize configured settings)
+          const possibleBases = [...spacesBaseUrls, ...envBases]
+
+          // If we have URL from video object, extract domain and add CDN variants
+          if (fullVideo.url) {
+            const urlMatch = fullVideo.url.match(/^(https?:\/\/[^\/]+)/);
+            if (urlMatch) {
+              const domain = urlMatch[1];
+              // Common CDN/storage patterns
+              possibleBases.push(
+                `${domain}/static/webseed`,
+                `${domain}/static/streaming-playlists/hls`,
+                domain.replace('://', '://cdn.'),
+                domain.replace('://', '://storage.'),
+                domain.replace('://', '://files.'),
+                domain.replace('peertube', 'peertube-streaming-1'),
+                domain.replace('peertube', 'peertube-videos-1')
+              )
+            }
+          }
+
+          // Try to find a working URL based on actual Spaces structure
+          for (const base of possibleBases) {
+            // The actual pattern from your Spaces:
+            // Master playlist: {uuid}-master.m3u8
+            // Individual quality: {uuid}-720-fragmented.mp4 or {uuid}-720.m3u8
+            const testUrls = [
+              `${base}/${fullVideo.uuid}-master.m3u8`,  // HLS master playlist
+              `${base}/${fullVideo.uuid}-720-fragmented.mp4`,  // Direct MP4
+              `${base}/${fullVideo.uuid}-720.m3u8`,  // 720p playlist
+              `${base}/${fullVideo.uuid}-480-fragmented.mp4`,  // 480p MP4
+              `${base}/${fullVideo.uuid}-480.m3u8`,  // 480p playlist
+              `${base}/${fullVideo.uuid}-360-fragmented.mp4`,  // 360p MP4
+              `${base}/${fullVideo.uuid}-360.m3u8`  // 360p playlist
+            ]
+
+            logger.info(`Testing object storage URLs with base ${base}`)
+
+            // Use the master playlist as it's most flexible for FFmpeg
+            if (testUrls[0]) {
+              videoPath = testUrls[0]
+              logger.info(`Using constructed object storage URL: ${videoPath}`)
+              break
+            }
+          }
+
+          // If still no path, log appropriate warning
+          if (!videoPath) {
+            logger.warn(`No video URL could be constructed - please configure Spaces CDN URLs and optionally S3/Spaces credentials in plugin settings`)
+          }
+        }
+
       } catch (e) {
-        logger.debug('Could not fetch video via API:', e.message)
+        logger.debug('Could not access video data server-side:', e.message)
       }
     }
 
@@ -604,6 +781,28 @@ async function getVideoTranscript(video) {
       }
     }
 
+    // Try to construct caption URL from Spaces if not found
+    if (!captionUrl && video.uuid) {
+      // Get configured captions CDN URL and credentials
+      const spacesCaptionsUrl = await settingsManager.getSetting('spaces-captions-url')
+      const accessKey = await settingsManager.getSetting('spaces-access-key')
+      const secretKey = await settingsManager.getSetting('spaces-secret-key')
+
+      if (spacesCaptionsUrl) {
+        // If we have credentials, always use signed URLs
+        if (accessKey && secretKey) {
+          captionUrl = await spacesService.getSignedCaptionUrl(video.uuid, spacesCaptionsUrl)
+          logger.info(`Generated signed caption URL for video`)
+        } else {
+          // No credentials - use direct URL (will only work for public videos)
+          captionUrl = `${spacesCaptionsUrl}/captions${video.uuid}-en.vtt`
+          logger.info(`Using direct caption URL (public videos only): ${captionUrl}`)
+        }
+      } else {
+        logger.debug('No captions CDN URL configured in settings')
+      }
+    }
+
     // If we have a remote caption URL, fetch it
     if (captionUrl && (captionUrl.startsWith('http://') || captionUrl.startsWith('https://'))) {
       try {
@@ -614,17 +813,24 @@ async function getVideoTranscript(video) {
           const client = captionUrl.startsWith('https') ? https : http
 
           client.get(captionUrl, (res) => {
-            let data = ''
-            res.on('data', chunk => data += chunk)
-            res.on('end', () => resolve(data))
-            res.on('error', reject)
+            if (res.statusCode === 200) {
+              let data = ''
+              res.on('data', chunk => data += chunk)
+              res.on('end', () => resolve(data))
+              res.on('error', reject)
+            } else {
+              logger.debug(`Caption URL returned status ${res.statusCode}`)
+              resolve(null)
+            }
           }).on('error', reject)
         })
 
-        logger.info(`Downloaded caption from remote URL: ${captionUrl}`)
-        return captionContent
+        if (captionContent) {
+          logger.info(`Downloaded caption from remote URL: ${captionUrl}`)
+          return captionContent
+        }
       } catch (error) {
-        logger.error('Error downloading remote caption:', error)
+        logger.debug('Error downloading remote caption:', error.message)
       }
     }
 
