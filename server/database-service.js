@@ -361,9 +361,9 @@ async function updateProcessingStatus(videoUuid, status, errorMessage = null) {
   try {
     await dbClient.query(`
       UPDATE plugin_ai_processing_queue
-      SET status = $2,
-          error_message = $3,
-          processed_at = CASE WHEN $2 = 'completed' THEN NOW() ELSE NULL END
+      SET status = $2::varchar,
+          error_message = $3::text,
+          processed_at = CASE WHEN $2::varchar = 'completed' THEN NOW() ELSE NULL END
       WHERE video_uuid = $1
     `, [videoUuid, status, errorMessage])
   } catch (error) {

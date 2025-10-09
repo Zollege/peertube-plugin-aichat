@@ -82,25 +82,63 @@ async function extractVideoSnapshots(video) {
   // Get video file path
   let videoPath
   try {
-    // Try to get the video file path - this might need adjustment based on PeerTube version
-    const videoFiles = await peertubeHelpers.videos.getFiles(video.id)
-    if (videoFiles && videoFiles.length > 0) {
-      videoPath = videoFiles[0].path
-    } else {
-      // Try alternative approach - look for the file directly
-      const videosPath = '/var/www/peertube/storage/videos'
-      const possiblePath = path.join(videosPath, `${video.uuid}-720.mp4`)
+    // Try multiple approaches to find the video file
 
-      try {
-        await fs.access(possiblePath)
-        videoPath = possiblePath
-      } catch {
-        throw new Error('No video files found')
+    // Approach 1: Try PeerTube helpers if available
+    try {
+      const videoFiles = await peertubeHelpers.videos.getFiles(video.id)
+      if (videoFiles && videoFiles.length > 0) {
+        videoPath = videoFiles[0].path
+        logger.info(`Found video file via helpers: ${videoPath}`)
+      }
+    } catch (e) {
+      logger.debug('Could not get files via helpers:', e.message)
+    }
+
+    // Approach 2: Check standard PeerTube storage locations
+    if (!videoPath) {
+      const possiblePaths = [
+        `/data/videos/${video.uuid}-720.mp4`,
+        `/data/videos/${video.uuid}-480.mp4`,
+        `/data/videos/${video.uuid}-360.mp4`,
+        `/data/videos/${video.uuid}-240.mp4`,
+        `/data/videos/${video.uuid}-1080.mp4`,
+        `/var/www/peertube/storage/videos/${video.uuid}-720.mp4`,
+        `/var/www/peertube/storage/videos/${video.uuid}-480.mp4`,
+        `/var/www/peertube/storage/streaming-playlists/hls/${video.uuid}/${video.uuid}-720-fragmented.mp4`,
+        `/var/www/peertube/storage/streaming-playlists/hls/${video.uuid}/${video.uuid}-480-fragmented.mp4`
+      ]
+
+      for (const testPath of possiblePaths) {
+        try {
+          await fs.access(testPath)
+          videoPath = testPath
+          logger.info(`Found video file at: ${videoPath}`)
+          break
+        } catch {
+          // File doesn't exist at this path, try next
+        }
       }
     }
+
+    // Approach 3: Check if video has streamingPlaylists
+    if (!videoPath && video.streamingPlaylists && video.streamingPlaylists.length > 0) {
+      const playlist = video.streamingPlaylists[0]
+      if (playlist.files && playlist.files.length > 0) {
+        // Use the first available file
+        const file = playlist.files[0]
+        videoPath = file.fileUrl || file.torrentUrl
+        logger.info(`Using streaming playlist file: ${videoPath}`)
+      }
+    }
+
+    if (!videoPath) {
+      logger.warn(`No local video file found for ${video.uuid}, skipping snapshot extraction`)
+      return // Skip snapshot extraction but continue processing
+    }
   } catch (error) {
-    logger.error('Could not get video file path:', error)
-    return
+    logger.error('Error while searching for video file:', error)
+    return // Skip snapshot extraction but continue processing
   }
 
   const duration = video.duration
@@ -192,20 +230,35 @@ async function processVideoTranscript(video) {
 async function getVideoTranscript(video) {
   // This function needs to be implemented based on PeerTube's actual transcript API
   try {
-    // Check if video has captions using PeerTube's helpers or direct file access
-    // For now, trying to find caption files in standard locations
-    const dataPath = peertubeHelpers.plugin.getDataDirectoryPath()
-    const captionsPath = path.join('/var/www/peertube/storage/captions')
-
-    // Try to find VTT file for this video
-    const possibleFiles = [
-      path.join(captionsPath, `${video.uuid}-en.vtt`),
-      path.join(captionsPath, `${video.uuid}.vtt`)
+    // Try multiple locations for caption files
+    const possiblePaths = [
+      `/data/captions/${video.uuid}-en.vtt`,
+      `/data/captions/${video.uuid}.vtt`,
+      `/var/www/peertube/storage/captions/${video.uuid}-en.vtt`,
+      `/var/www/peertube/storage/captions/${video.uuid}.vtt`,
+      `/var/www/peertube/storage/captions/${video.uuid}-fr.vtt`,
+      `/var/www/peertube/storage/captions/${video.uuid}-es.vtt`
     ]
 
-    for (const filePath of possibleFiles) {
+    // Also check for any language code
+    const captionDirs = ['/data/captions', '/var/www/peertube/storage/captions']
+    for (const dir of captionDirs) {
+      try {
+        const files = await fs.readdir(dir)
+        const videoCaption = files.find(f => f.startsWith(video.uuid) && f.endsWith('.vtt'))
+        if (videoCaption) {
+          possiblePaths.push(path.join(dir, videoCaption))
+        }
+      } catch {
+        // Directory doesn't exist or can't be read
+      }
+    }
+
+    // Try to find and read VTT file
+    for (const filePath of possiblePaths) {
       try {
         const content = await fs.readFile(filePath, 'utf-8')
+        logger.info(`Found caption file at: ${filePath}`)
         return content
       } catch {
         // File doesn't exist, try next
