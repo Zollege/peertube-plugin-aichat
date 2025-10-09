@@ -4,108 +4,123 @@ function register({ registerHook, peertubeHelpers }) {
     target: 'action:video-watch.video.loaded',
     handler: ({ video }) => {
       initializeAIChat(video, peertubeHelpers)
-      addProcessButton(video, peertubeHelpers)
+      // Add process button after a delay to ensure DOM is ready
+      setTimeout(() => addProcessButton(video, peertubeHelpers), 2000)
     }
   })
 }
 
 async function addProcessButton(video, peertubeHelpers) {
-  // Use PeerTube's registerVideoField to add action button
+  console.log('[AI Chat] Looking for video action menu...')
+
   const user = await peertubeHelpers.getUser()
-  const isOwner = user && video.account && user.account.id === video.account.id
-  const isAdmin = user && user.role && user.role === 0
+  if (!user) {
+    console.log('[AI Chat] No user logged in, skipping process button')
+    return
+  }
 
-  if (!isOwner && !isAdmin) return
+  const isOwner = video.account && user.account && user.account.id === video.account.id
+  const isAdmin = user.role === 0 // 0 is admin role
 
-  // Poll for the action dropdown button
+  if (!isOwner && !isAdmin) {
+    console.log('[AI Chat] User is not owner or admin, skipping process button')
+    return
+  }
+
+  // Poll for the action dropdown button with multiple possible selectors
   let attempts = 0
-  const maxAttempts = 20
+  const maxAttempts = 30 // Increase attempts
 
   const checkForDropdown = setInterval(() => {
     attempts++
+    console.log(`[AI Chat] Attempt ${attempts} to find dropdown...`)
 
-    // Look for the action button (three dots menu)
-    const actionDropdown = document.querySelector('.video-actions .action-button-more')
+    // Try multiple selectors for the dropdown button
+    const dropdownButton = document.querySelector('.action-button-more') ||
+                          document.querySelector('.video-actions .dropdown-toggle') ||
+                          document.querySelector('[aria-label="More actions"]') ||
+                          document.querySelector('my-video-actions-dropdown button')
 
-    if (actionDropdown || attempts >= maxAttempts) {
+    if (dropdownButton) {
+      console.log('[AI Chat] Found dropdown button:', dropdownButton)
       clearInterval(checkForDropdown)
 
-      if (actionDropdown) {
-        // Find the dropdown menu container
-        const dropdownContainer = actionDropdown.closest('.dropdown')
+      // Add click listener to inject our button when dropdown opens
+      dropdownButton.addEventListener('click', () => {
+        console.log('[AI Chat] Dropdown clicked, waiting for menu...')
 
-        if (dropdownContainer) {
-          // Listen for when dropdown is opened
-          actionDropdown.addEventListener('click', () => {
-            setTimeout(() => {
-              const dropdownMenu = dropdownContainer.querySelector('.dropdown-menu')
+        setTimeout(() => {
+          // Find the dropdown menu
+          const dropdownMenu = document.querySelector('.dropdown-menu.show') ||
+                              document.querySelector('.dropdown-menu[aria-expanded="true"]') ||
+                              document.querySelector('.video-actions .dropdown-menu')
 
-              // Check if we already added the button
-              if (dropdownMenu && !dropdownMenu.querySelector('.ai-chat-process-btn')) {
-                // Create process button matching PeerTube's style
-                const processItem = document.createElement('a')
-                processItem.className = 'dropdown-item ai-chat-process-btn'
-                processItem.href = '#'
-                processItem.innerHTML = `
-                  <my-global-icon iconname="refresh" aria-hidden="true"></my-global-icon>
-                  <span>Process with AI Chat</span>
-                `
+          if (dropdownMenu && !dropdownMenu.querySelector('.ai-chat-process-btn')) {
+            console.log('[AI Chat] Adding process button to menu')
 
-                processItem.addEventListener('click', async (e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
+            // Create process button
+            const processItem = document.createElement('a')
+            processItem.className = 'dropdown-item ai-chat-process-btn'
+            processItem.href = '#'
+            processItem.innerHTML = `
+              <span style="margin-right: 8px;">🤖</span>
+              <span>Process with AI Chat</span>
+            `
 
-                  // Update button to show processing
-                  processItem.classList.add('disabled')
-                  processItem.style.pointerEvents = 'none'
-                  processItem.innerHTML = `
-                    <my-global-icon iconname="loader" aria-hidden="true"></my-global-icon>
-                    <span>Processing...</span>
-                  `
+            processItem.addEventListener('click', async (e) => {
+              e.preventDefault()
+              e.stopPropagation()
 
-                  try {
-                    const response = await fetch(peertubeHelpers.getBaseRouterRoute() + `/processing/trigger/${video.uuid}`, {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        ...peertubeHelpers.getAuthHeader()
-                      }
-                    })
+              processItem.style.opacity = '0.5'
+              processItem.style.pointerEvents = 'none'
+              processItem.innerHTML = `
+                <span style="margin-right: 8px;">⏳</span>
+                <span>Processing...</span>
+              `
 
-                    if (response.ok) {
-                      peertubeHelpers.notifier.success('Video queued for AI processing')
-                    } else {
-                      throw new Error('Failed to trigger processing')
-                    }
-                  } catch (error) {
-                    console.error('Error triggering processing:', error)
-                    peertubeHelpers.notifier.error('Failed to process video')
-                  } finally {
-                    // Reset button
-                    processItem.classList.remove('disabled')
-                    processItem.style.pointerEvents = ''
-                    processItem.innerHTML = `
-                      <my-global-icon iconname="refresh" aria-hidden="true"></my-global-icon>
-                      <span>Reprocess with AI Chat</span>
-                    `
+              try {
+                const response = await fetch(peertubeHelpers.getBaseRouterRoute() + `/processing/trigger/${video.uuid}`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...peertubeHelpers.getAuthHeader()
                   }
                 })
 
-                // Add separator if needed
-                const existingItems = dropdownMenu.querySelectorAll('.dropdown-item')
-                if (existingItems.length > 0) {
-                  const separator = document.createElement('div')
-                  separator.className = 'dropdown-divider'
-                  dropdownMenu.appendChild(separator)
+                if (response.ok) {
+                  peertubeHelpers.notifier.success('Video queued for AI processing')
+                } else {
+                  throw new Error('Failed to trigger processing')
                 }
-
-                // Add the process button
-                dropdownMenu.appendChild(processItem)
+              } catch (error) {
+                console.error('[AI Chat] Error triggering processing:', error)
+                peertubeHelpers.notifier.error('Failed to process video')
+              } finally {
+                processItem.style.opacity = '1'
+                processItem.style.pointerEvents = ''
+                processItem.innerHTML = `
+                  <span style="margin-right: 8px;">🤖</span>
+                  <span>Reprocess with AI Chat</span>
+                `
               }
-            }, 100)
-          })
-        }
-      }
+            })
+
+            // Add separator if there are existing items
+            const existingItems = dropdownMenu.querySelectorAll('.dropdown-item')
+            if (existingItems.length > 0) {
+              const separator = document.createElement('div')
+              separator.className = 'dropdown-divider'
+              dropdownMenu.appendChild(separator)
+            }
+
+            // Add the process button
+            dropdownMenu.appendChild(processItem)
+          }
+        }, 200) // Small delay for dropdown to fully render
+      })
+    } else if (attempts >= maxAttempts) {
+      console.log('[AI Chat] Could not find dropdown button after', maxAttempts, 'attempts')
+      clearInterval(checkForDropdown)
     }
   }, 500)
 }
@@ -118,22 +133,23 @@ async function initializeAIChat(video, peertubeHelpers) {
   }
 
   // Remove existing chat if present
-  const existingChat = document.getElementById('ai-chat-container')
+  const existingContainer = document.getElementById('ai-chat-floating-container')
   const existingToggle = document.getElementById('ai-chat-toggle-btn')
-  if (existingChat) existingChat.remove()
+  if (existingContainer) existingContainer.remove()
   if (existingToggle) existingToggle.remove()
 
-  // Create chat container that sits beside the video
-  const chatContainer = document.createElement('div')
-  chatContainer.id = 'ai-chat-container'
-  chatContainer.className = 'ai-chat-container'
+  // Create floating container
+  const floatingContainer = document.createElement('div')
+  floatingContainer.id = 'ai-chat-floating-container'
+  floatingContainer.className = 'ai-chat-floating-container'
+  floatingContainer.style.display = 'none' // Start hidden
 
   // Build the chat interface
-  chatContainer.innerHTML = `
+  floatingContainer.innerHTML = `
     <div class="ai-chat-header">
       <h3>AI Assistant</h3>
-      <button class="ai-chat-minimize" aria-label="Minimize chat">
-        <span>−</span>
+      <button class="ai-chat-close" aria-label="Close chat">
+        <span>×</span>
       </button>
     </div>
     <div class="ai-chat-body">
@@ -159,37 +175,17 @@ async function initializeAIChat(video, peertubeHelpers) {
     </div>
   `
 
-  // Create minimized button
+  // Create floating toggle button
   const toggleButton = document.createElement('button')
   toggleButton.id = 'ai-chat-toggle-btn'
   toggleButton.className = 'ai-chat-toggle-btn'
   toggleButton.innerHTML = `
     <span class="chat-icon">💬</span>
-    <span class="chat-text">AI Chat</span>
   `
-  toggleButton.style.display = 'none'
 
-  // Find the video wrapper and add chat beside it
-  const mainRow = document.querySelector('.main-row')
-  const videoCol = document.querySelector('.main-col')
-
-  if (mainRow && videoCol) {
-    // Create a new column for the chat
-    const chatCol = document.createElement('div')
-    chatCol.className = 'ai-chat-col'
-    chatCol.appendChild(chatContainer)
-    chatCol.appendChild(toggleButton)
-
-    // Add the chat column after the video column
-    videoCol.parentNode.insertBefore(chatCol, videoCol.nextSibling)
-  } else {
-    // Fallback: add below video info if structure is different
-    const videoInfo = document.querySelector('.video-info')
-    if (videoInfo) {
-      videoInfo.parentNode.insertBefore(chatContainer, videoInfo.nextSibling)
-      videoInfo.parentNode.insertBefore(toggleButton, videoInfo.nextSibling)
-    }
-  }
+  // Add to body for floating positioning
+  document.body.appendChild(floatingContainer)
+  document.body.appendChild(toggleButton)
 
   // Initialize event handlers
   initializeChatHandlers(video, peertubeHelpers)
@@ -201,25 +197,31 @@ async function initializeAIChat(video, peertubeHelpers) {
 function initializeChatHandlers(video, peertubeHelpers) {
   const input = document.getElementById('ai-chat-input')
   const sendButton = document.getElementById('ai-chat-send')
-  const messagesContainer = document.getElementById('ai-chat-messages')
-  const chatContainer = document.getElementById('ai-chat-container')
+  const floatingContainer = document.getElementById('ai-chat-floating-container')
   const toggleButton = document.getElementById('ai-chat-toggle-btn')
-  const minimizeButton = document.querySelector('.ai-chat-minimize')
+  const closeButton = document.querySelector('.ai-chat-close')
 
-  // Minimize/maximize chat
-  const minimizeChat = () => {
-    chatContainer.style.display = 'none'
-    toggleButton.style.display = 'flex'
-  }
-
-  const maximizeChat = () => {
-    chatContainer.style.display = 'flex'
+  // Toggle chat visibility
+  const openChat = () => {
+    floatingContainer.style.display = 'flex'
     toggleButton.style.display = 'none'
     input?.focus()
   }
 
-  minimizeButton?.addEventListener('click', minimizeChat)
-  toggleButton?.addEventListener('click', maximizeChat)
+  const closeChat = () => {
+    floatingContainer.style.display = 'none'
+    toggleButton.style.display = 'flex'
+  }
+
+  toggleButton?.addEventListener('click', openChat)
+  closeButton?.addEventListener('click', closeChat)
+
+  // ESC key to close
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && floatingContainer.style.display === 'flex') {
+      closeChat()
+    }
+  })
 
   // Send message handler
   const sendMessage = async () => {
