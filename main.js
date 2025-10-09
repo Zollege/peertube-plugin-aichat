@@ -36,8 +36,15 @@ async function register({
   // Register plugin settings
   await registerSettings(registerSetting)
 
-  // Initialize services
-  await databaseService.initialize(services)
+  // Initialize services with error handling
+  try {
+    await databaseService.initialize(services)
+    logger.info('Database service initialized successfully')
+  } catch (error) {
+    logger.error('Failed to initialize database service:', error)
+    // Continue with plugin load but log the error
+  }
+
   await openaiService.initialize(services)
   videoProcessor.initialize(services)
   chatService.initialize(services)

@@ -8,6 +8,8 @@ async function initialize(services) {
   try {
     const sequelize = peertubeHelpers.database.sequelize
 
+    logger.info('Starting database initialization for AI Chat plugin...')
+
     // Create tables with pgvector support
     await sequelize.query(`
       CREATE EXTENSION IF NOT EXISTS vector;
@@ -92,8 +94,18 @@ async function initialize(services) {
     `)
 
     logger.info('Database tables initialized successfully')
+
+    // Verify tables were created
+    const tables = await sequelize.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public'
+      AND table_name LIKE 'plugin_ai_%'
+    `, { type: sequelize.QueryTypes.SELECT })
+
+    logger.info('Created AI Chat tables:', tables.map(t => t.table_name).join(', '))
   } catch (error) {
     logger.error('Failed to initialize database:', error)
+    throw error // Re-throw to make sure the error is noticed
   }
 }
 

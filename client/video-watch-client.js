@@ -158,45 +158,61 @@ async function initializeAIChat(video, peertubeHelpers) {
   }
 
   // Remove existing chat if present
-  const existingContainer = document.getElementById('ai-chat-floating-container')
+  const existingDrawer = document.getElementById('ai-chat-drawer')
   const existingToggle = document.getElementById('ai-chat-toggle-btn')
-  if (existingContainer) existingContainer.remove()
+  const existingOverlay = document.getElementById('ai-chat-overlay')
+  if (existingDrawer) existingDrawer.remove()
   if (existingToggle) existingToggle.remove()
+  if (existingOverlay) existingOverlay.remove()
 
-  // Create floating container
-  const floatingContainer = document.createElement('div')
-  floatingContainer.id = 'ai-chat-floating-container'
-  floatingContainer.className = 'ai-chat-floating-container'
-  floatingContainer.style.display = 'none' // Start hidden
+  // Create overlay for mobile
+  const overlay = document.createElement('div')
+  overlay.id = 'ai-chat-overlay'
+  overlay.className = 'ai-chat-overlay'
+
+  // Create drawer container
+  const drawer = document.createElement('div')
+  drawer.id = 'ai-chat-drawer'
+  drawer.className = 'ai-chat-drawer'
 
   // Build the chat interface
-  floatingContainer.innerHTML = `
+  drawer.innerHTML = `
     <div class="ai-chat-header">
       <h3>AI Assistant</h3>
       <button class="ai-chat-close" aria-label="Close chat">
-        <span>×</span>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
       </button>
     </div>
     <div class="ai-chat-body">
       <div class="ai-chat-messages" id="ai-chat-messages">
         <div class="ai-chat-welcome">
-          Ask me anything about this video! I can help you understand the content,
-          find specific moments, or provide additional context.
+          <div class="welcome-icon">🤖</div>
+          <h4>Ask me anything about this video!</h4>
+          <p>I can help you:</p>
+          <ul>
+            <li>Understand complex topics</li>
+            <li>Find specific moments</li>
+            <li>Get summaries and insights</li>
+            <li>Answer questions about the content</li>
+          </ul>
         </div>
       </div>
-      <div class="ai-chat-input-container">
-        <textarea
-          id="ai-chat-input"
-          class="ai-chat-input"
-          placeholder="Ask a question about the video..."
-          rows="2"
-        ></textarea>
-        <button id="ai-chat-send" class="ai-chat-send" aria-label="Send message">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-          </svg>
-        </button>
-      </div>
+    </div>
+    <div class="ai-chat-input-container">
+      <textarea
+        id="ai-chat-input"
+        class="ai-chat-input"
+        placeholder="Ask a question about the video..."
+        rows="3"
+      ></textarea>
+      <button id="ai-chat-send" class="ai-chat-send" aria-label="Send message">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+        </svg>
+      </button>
     </div>
   `
 
@@ -205,11 +221,15 @@ async function initializeAIChat(video, peertubeHelpers) {
   toggleButton.id = 'ai-chat-toggle-btn'
   toggleButton.className = 'ai-chat-toggle-btn'
   toggleButton.innerHTML = `
-    <span class="chat-icon">💬</span>
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M8 12H16M8 8H16M8 16H12M21 12C21 16.9706 16.9706 21 12 21C10.2275 21 8.57127 20.4772 7.1962 19.5857L3.5 20.5L4.41427 16.8038C3.52284 15.4287 3 13.7725 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z"/>
+    </svg>
+    <span class="chat-badge">AI</span>
   `
 
-  // Add to body for floating positioning
-  document.body.appendChild(floatingContainer)
+  // Add to body
+  document.body.appendChild(overlay)
+  document.body.appendChild(drawer)
   document.body.appendChild(toggleButton)
 
   // Initialize event handlers
@@ -222,28 +242,34 @@ async function initializeAIChat(video, peertubeHelpers) {
 function initializeChatHandlers(video, peertubeHelpers) {
   const input = document.getElementById('ai-chat-input')
   const sendButton = document.getElementById('ai-chat-send')
-  const floatingContainer = document.getElementById('ai-chat-floating-container')
+  const drawer = document.getElementById('ai-chat-drawer')
+  const overlay = document.getElementById('ai-chat-overlay')
   const toggleButton = document.getElementById('ai-chat-toggle-btn')
   const closeButton = document.querySelector('.ai-chat-close')
 
   // Toggle chat visibility
   const openChat = () => {
-    floatingContainer.style.display = 'flex'
-    toggleButton.style.display = 'none'
+    drawer.classList.add('open')
+    overlay.classList.add('show')
+    toggleButton.classList.add('hidden')
+    document.body.style.overflow = 'hidden' // Prevent background scrolling
     input?.focus()
   }
 
   const closeChat = () => {
-    floatingContainer.style.display = 'none'
-    toggleButton.style.display = 'flex'
+    drawer.classList.remove('open')
+    overlay.classList.remove('show')
+    toggleButton.classList.remove('hidden')
+    document.body.style.overflow = '' // Restore scrolling
   }
 
   toggleButton?.addEventListener('click', openChat)
   closeButton?.addEventListener('click', closeChat)
+  overlay?.addEventListener('click', closeChat)
 
   // ESC key to close
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && floatingContainer.style.display === 'flex') {
+    if (e.key === 'Escape' && drawer.classList.contains('open')) {
       closeChat()
     }
   })
