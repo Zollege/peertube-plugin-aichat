@@ -76,7 +76,7 @@ async function generateSignedUrl(bucketUrl, objectKey, expiresIn = 21600) {
     })
 
     const signedUrl = await getSignedUrl(client, command, { expiresIn })
-    logger.info(`Generated signed URL (expires in ${expiresIn}s)`)
+    logger.info(`Generated signed URL (expires in ${expiresIn}s): ${signedUrl}`)
 
     return signedUrl
   } catch (error) {
@@ -110,7 +110,7 @@ async function getSignedVideoUrl(videoUuid, baseUrl, isStreamingPlaylist = true)
     // If signed URL fails, return the public URL as fallback
     // This will work for public videos but fail for private ones
     const publicUrl = `${baseUrl}/${objectKey}`
-    logger.debug(`Using public URL as fallback: ${publicUrl}`)
+    logger.info(`Using public URL as fallback: ${publicUrl}`)
     return publicUrl
 
   } catch (error) {

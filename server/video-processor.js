@@ -169,35 +169,44 @@ async function extractVideoSnapshots(video) {
             if (reloadedVideo) {
               logger.info(`Reloaded video has files: VideoFiles=${!!reloadedVideo.VideoFiles}, StreamingPlaylists=${!!reloadedVideo.VideoStreamingPlaylists}`)
 
-              // Update the videoModel reference with the reloaded data
-              videoModel = reloadedVideo
-
-              if (reloadedVideo.VideoFiles && reloadedVideo.VideoFiles.length > 0) {
+              // CRITICAL: Actually assign the files to fullVideo so they can be checked later
+              if (reloadedVideo.VideoFiles) {
                 fullVideo.VideoFiles = reloadedVideo.VideoFiles
-                logger.info(`Added ${reloadedVideo.VideoFiles.length} VideoFiles from reload`)
+                videoModel.VideoFiles = reloadedVideo.VideoFiles
+                logger.info(`Assigned ${reloadedVideo.VideoFiles.length} VideoFiles to fullVideo`)
 
                 // Log the actual file data
-                const firstFile = reloadedVideo.VideoFiles[0]
-                const fileData = firstFile.dataValues || firstFile
-                logger.info(`Reloaded VideoFile data: ${JSON.stringify(fileData)}`)
-              }
-              if (reloadedVideo.VideoStreamingPlaylists && reloadedVideo.VideoStreamingPlaylists.length > 0) {
-                fullVideo.VideoStreamingPlaylists = reloadedVideo.VideoStreamingPlaylists
-                logger.info(`Added ${reloadedVideo.VideoStreamingPlaylists.length} StreamingPlaylists from reload`)
-
-                // Log the actual playlist data
-                const firstPlaylist = reloadedVideo.VideoStreamingPlaylists[0]
-                const playlistData = firstPlaylist.dataValues || firstPlaylist
-                logger.info(`Reloaded Playlist data: ${JSON.stringify(playlistData)}`)
-
-                // Check for nested VideoFiles in playlists
-                if (firstPlaylist.VideoFiles && firstPlaylist.VideoFiles.length > 0) {
-                  logger.info(`Playlist has ${firstPlaylist.VideoFiles.length} nested VideoFiles`)
-                  const firstNestedFile = firstPlaylist.VideoFiles[0]
-                  const nestedFileData = firstNestedFile.dataValues || firstNestedFile
-                  logger.info(`Nested VideoFile data: ${JSON.stringify(nestedFileData)}`)
+                if (reloadedVideo.VideoFiles.length > 0) {
+                  const firstFile = reloadedVideo.VideoFiles[0]
+                  const fileData = firstFile.dataValues || firstFile
+                  logger.info(`First VideoFile data: ${JSON.stringify(fileData)}`)
                 }
               }
+
+              if (reloadedVideo.VideoStreamingPlaylists) {
+                fullVideo.VideoStreamingPlaylists = reloadedVideo.VideoStreamingPlaylists
+                videoModel.VideoStreamingPlaylists = reloadedVideo.VideoStreamingPlaylists
+                logger.info(`Assigned ${reloadedVideo.VideoStreamingPlaylists.length} StreamingPlaylists to fullVideo`)
+
+                // Log the actual playlist data
+                if (reloadedVideo.VideoStreamingPlaylists.length > 0) {
+                  const firstPlaylist = reloadedVideo.VideoStreamingPlaylists[0]
+                  const playlistData = firstPlaylist.dataValues || firstPlaylist
+                  logger.info(`First Playlist data: ${JSON.stringify(playlistData)}`)
+
+                  // Check for nested VideoFiles in playlists
+                  if (firstPlaylist.VideoFiles && firstPlaylist.VideoFiles.length > 0) {
+                    logger.info(`Playlist has ${firstPlaylist.VideoFiles.length} nested VideoFiles`)
+                    const firstNestedFile = firstPlaylist.VideoFiles[0]
+                    const nestedFileData = firstNestedFile.dataValues || firstNestedFile
+                    logger.info(`First nested VideoFile data: ${JSON.stringify(nestedFileData)}`)
+                  }
+                }
+              }
+
+              // Log what we have after assignment
+              logger.info(`After reload - fullVideo.VideoFiles: ${fullVideo.VideoFiles ? fullVideo.VideoFiles.length : 0} files`)
+              logger.info(`After reload - fullVideo.VideoStreamingPlaylists: ${fullVideo.VideoStreamingPlaylists ? fullVideo.VideoStreamingPlaylists.length : 0} playlists`)
             }
           }
         } catch (e) {
@@ -426,7 +435,7 @@ async function extractVideoSnapshots(video) {
 
         // Method 5: Try to generate signed URLs for any video (public or private)
         if (!videoPath) {
-          logger.info('Attempting to generate signed URL for video access')
+          logger.info('No video URL found yet - attempting to generate signed URL for video access')
 
           // Get configured CDN URLs from settings
           const spacesStreamingUrl = await settingsManager.getSetting('spaces-streaming-url')
