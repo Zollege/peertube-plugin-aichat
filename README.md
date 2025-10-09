@@ -68,7 +68,7 @@ cp -r peertube-plugin-aichat /var/www/peertube/storage/plugins/
 ### Optional Settings
 
 - **Snapshot Interval**: Set the interval between video snapshots (1-60 seconds, default: 5)
-- **OpenAI Model**: Choose between GPT-4 Vision, GPT-4, or GPT-3.5 Turbo
+- **OpenAI Model**: Choose from GPT-4.1-nano, GPT-4.1-mini, GPT-4.1, GPT-4o-mini, GPT-4o, GPT-4 Turbo, or GPT-4
 - **Max Response Tokens**: Maximum tokens for AI responses (default: 1000)
 - **System Prompt**: Customize the AI assistant's behavior
 
@@ -77,7 +77,7 @@ cp -r peertube-plugin-aichat /var/www/peertube/storage/plugins/
 1. **Video Processing**:
    - When a video is uploaded, the plugin automatically:
      - Extracts snapshots at the configured interval (1-60 seconds)
-     - Analyzes snapshots using GPT-4 Vision
+     - Analyzes snapshots using the configured model (all models support vision)
      - Processes video transcripts
      - Generates embeddings for semantic search
 
@@ -164,9 +164,18 @@ Common issues:
 ## Cost Considerations
 
 This plugin uses OpenAI's API which incurs costs:
-- GPT-4 Vision for snapshot analysis
-- Text embeddings for semantic search
-- GPT-4/3.5 for chat responses
+- Vision analysis for snapshots (configurable model)
+- Text embeddings for semantic search (text-embedding-3-small)
+- Chat responses (configurable model)
+
+Model cost comparison for vision (from lowest to highest cost):
+- **GPT-4.1-nano**: Most cost-efficient (2.46x multiplier for vision tokens)
+- **GPT-4.1-mini**: Very cost-efficient (1.62x multiplier for vision tokens)
+- **GPT-4o-mini**: Good for basic tasks (2833 base tokens)
+- **GPT-4.1**: Latest balanced model
+- **GPT-4o**: Previous generation balanced (85 base tokens)
+- **GPT-4 Turbo**: Higher quality, higher cost
+- **GPT-4**: Highest quality, highest cost
 
 Monitor your usage in the OpenAI dashboard and set appropriate limits.
 

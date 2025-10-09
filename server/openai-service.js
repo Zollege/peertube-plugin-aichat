@@ -43,8 +43,11 @@ async function analyzeImage(base64Image, prompt) {
     throw new Error('OpenAI client not initialized')
   }
 
+  // Get the configured model (all current models support vision)
+  const model = await settingsManager.getSetting('openai-model') || 'gpt-4.1-mini'
+
   const response = await openaiClient.chat.completions.create({
-    model: 'gpt-4-vision-preview',
+    model: model,
     messages: [
       {
         role: 'system',

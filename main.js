@@ -89,19 +89,23 @@ async function registerSettings(registerSetting) {
     default: true
   })
 
-  // Model selection
+  // Model selection (ordered by cost efficiency for vision)
   registerSetting({
     name: 'openai-model',
     label: 'OpenAI Model',
     type: 'select',
     options: [
-      { label: 'GPT-4 Vision', value: 'gpt-4-vision-preview' },
-      { label: 'GPT-4', value: 'gpt-4' },
-      { label: 'GPT-3.5 Turbo', value: 'gpt-3.5-turbo' }
+      { label: 'GPT-4.1-nano (Most cost-efficient)', value: 'gpt-4.1-nano' },
+      { label: 'GPT-4.1-mini (Very cost-efficient)', value: 'gpt-4.1-mini' },
+      { label: 'GPT-4o-mini (Legacy mini)', value: 'gpt-4o-mini' },
+      { label: 'GPT-4.1 (Latest balanced)', value: 'gpt-4.1' },
+      { label: 'GPT-4o (Legacy balanced)', value: 'gpt-4o' },
+      { label: 'GPT-4 Turbo', value: 'gpt-4-turbo' },
+      { label: 'GPT-4', value: 'gpt-4' }
     ],
-    descriptionHTML: 'Which OpenAI model to use for chat responses',
+    descriptionHTML: 'Which OpenAI model to use for chat and vision (ordered by cost efficiency)',
     private: false,
-    default: 'gpt-4-vision-preview'
+    default: 'gpt-4.1-mini'
   })
 
   // Snapshot interval
