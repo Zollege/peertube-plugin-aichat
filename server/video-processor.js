@@ -121,7 +121,7 @@ async function extractVideoSnapshots(video) {
       }
     }
 
-    // Approach 3: Check if video has streamingPlaylists
+    // Approach 3: Check if video has streamingPlaylists (for HLS)
     if (!videoPath && video.streamingPlaylists && video.streamingPlaylists.length > 0) {
       const playlist = video.streamingPlaylists[0]
       if (playlist.files && playlist.files.length > 0) {
@@ -132,8 +132,73 @@ async function extractVideoSnapshots(video) {
       }
     }
 
+    // Approach 4: Check for remote files (object storage like S3/Spaces)
+    if (!videoPath && video.files && video.files.length > 0) {
+      // Sort by resolution to get best quality first
+      const sortedFiles = [...video.files].sort((a, b) => (b.resolution || 0) - (a.resolution || 0))
+      for (const file of sortedFiles) {
+        if (file.fileUrl) {
+          videoPath = file.fileUrl
+          logger.info(`Using remote video file URL: ${videoPath}`)
+          break
+        }
+      }
+    }
+
+    // Approach 5: Try to construct the remote URL if we have the base URL
     if (!videoPath) {
-      logger.warn(`No local video file found for ${video.uuid}, skipping snapshot extraction`)
+      // Check if video has a URL property
+      if (video.url) {
+        logger.info(`Video has URL property: ${video.url}`)
+      }
+
+      // Try to get video details with more complete information
+      try {
+        const fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+        if (fullVideo) {
+          // Check for files in the full video object
+          if (fullVideo.files && fullVideo.files.length > 0) {
+            const file = fullVideo.files.find(f => f.fileUrl) || fullVideo.files[0]
+            if (file && file.fileUrl) {
+              videoPath = file.fileUrl
+              logger.info(`Found remote file URL from full video: ${videoPath}`)
+            }
+          }
+
+          // Check for webtorrent files
+          if (!videoPath && fullVideo.webtorrentFiles && fullVideo.webtorrentFiles.length > 0) {
+            const file = fullVideo.webtorrentFiles.find(f => f.fileUrl) || fullVideo.webtorrentFiles[0]
+            if (file && file.fileUrl) {
+              videoPath = file.fileUrl
+              logger.info(`Found webtorrent file URL: ${videoPath}`)
+            }
+          }
+
+          // Check for HLS files
+          if (!videoPath && fullVideo.streamingPlaylists && fullVideo.streamingPlaylists.length > 0) {
+            const playlist = fullVideo.streamingPlaylists[0]
+            if (playlist.playlistUrl) {
+              // For HLS, we might need to use the playlist URL
+              // FFmpeg can handle m3u8 playlists directly
+              videoPath = playlist.playlistUrl
+              logger.info(`Using HLS playlist URL: ${videoPath}`)
+            } else if (playlist.files && playlist.files.length > 0) {
+              const file = playlist.files.find(f => f.fileUrl) || playlist.files[0]
+              if (file && file.fileUrl) {
+                videoPath = file.fileUrl
+                logger.info(`Found HLS file URL: ${videoPath}`)
+              }
+            }
+          }
+        }
+      } catch (error) {
+        logger.error('Error loading full video details:', error)
+      }
+    }
+
+    if (!videoPath) {
+      logger.warn(`No video file found (local or remote) for ${video.uuid}, skipping snapshot extraction`)
+      logger.debug(`Video object keys: ${Object.keys(video).join(', ')}`)
       return // Skip snapshot extraction but continue processing
     }
   } catch (error) {
@@ -150,13 +215,37 @@ async function extractVideoSnapshots(video) {
 
     try {
       await new Promise((resolve, reject) => {
-        ffmpeg(videoPath)
+        const ffmpegCommand = ffmpeg(videoPath)
           .seekInput(timestamp)
           .frames(1)
           .output(outputPath)
           .outputOptions(['-q:v', '2'])
+
+        // Add input options for remote URLs
+        if (videoPath.startsWith('http://') || videoPath.startsWith('https://')) {
+          // Add options for handling remote files
+          ffmpegCommand.inputOptions([
+            '-analyzeduration', '10000000', // Analyze duration for better seeking
+            '-probesize', '10000000'         // Probe size for remote files
+          ])
+
+          // For HLS playlists, add protocol whitelist
+          if (videoPath.includes('.m3u8')) {
+            ffmpegCommand.inputOptions([
+              '-protocol_whitelist', 'file,http,https,tcp,tls'
+            ])
+          }
+        }
+
+        ffmpegCommand
+          .on('start', (cmd) => {
+            logger.debug(`FFmpeg command: ${cmd}`)
+          })
           .on('end', resolve)
-          .on('error', reject)
+          .on('error', (err) => {
+            logger.error(`FFmpeg error at ${timestamp}s: ${err.message}`)
+            reject(err)
+          })
           .run()
       })
 
@@ -228,9 +317,106 @@ async function processVideoTranscript(video) {
 }
 
 async function getVideoTranscript(video) {
-  // This function needs to be implemented based on PeerTube's actual transcript API
   try {
-    // Try multiple locations for caption files
+    // First, try to get captions through PeerTube's API
+    let captionUrl = null
+    let captionContent = null
+
+    // Try to load full video details which might include caption information
+    try {
+      const fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+
+      // Check if video has captions property
+      if (fullVideo.captions || fullVideo.videoCaptions) {
+        const captions = fullVideo.captions || fullVideo.videoCaptions
+        logger.info(`Found ${captions.length} caption(s) for video ${video.uuid}`)
+
+        // Prefer English, but take any available caption
+        const caption = captions.find(c => c.language?.id === 'en' || c.language?.code === 'en') ||
+                       captions[0]
+
+        if (caption) {
+          captionUrl = caption.captionPath || caption.fileUrl || caption.url
+          logger.info(`Found caption URL: ${captionUrl}`)
+        }
+      }
+
+      // Also check trackerUrls, which might contain caption info
+      if (!captionUrl && fullVideo.trackerUrls) {
+        logger.debug(`Video has tracker URLs: ${fullVideo.trackerUrls.length}`)
+      }
+
+      // Log available properties for debugging
+      if (!captionUrl) {
+        logger.debug(`Full video object keys: ${Object.keys(fullVideo).join(', ')}`)
+      }
+    } catch (error) {
+      logger.debug('Could not load video captions via API:', error.message)
+    }
+
+    // Alternative: Try to get captions via a direct API call if available
+    if (!captionUrl) {
+      try {
+        // Some PeerTube instances expose captions at this endpoint
+        const https = require('https')
+        const http = require('http')
+        const baseUrl = peertubeHelpers.config.getWebserverUrl()
+        const captionApiUrl = `${baseUrl}/api/v1/videos/${video.uuid}/captions`
+
+        const captionData = await new Promise((resolve, reject) => {
+          const client = captionApiUrl.startsWith('https') ? https : http
+
+          client.get(captionApiUrl, (res) => {
+            let data = ''
+            res.on('data', chunk => data += chunk)
+            res.on('end', () => {
+              try {
+                resolve(JSON.parse(data))
+              } catch {
+                resolve(null)
+              }
+            })
+            res.on('error', reject)
+          }).on('error', reject)
+        })
+
+        if (captionData && captionData.data && captionData.data.length > 0) {
+          const caption = captionData.data.find(c => c.language?.id === 'en') || captionData.data[0]
+          if (caption) {
+            captionUrl = caption.captionPath
+            logger.info(`Found caption via API endpoint: ${captionUrl}`)
+          }
+        }
+      } catch (error) {
+        logger.debug('Could not fetch captions via API endpoint:', error.message)
+      }
+    }
+
+    // If we have a remote caption URL, fetch it
+    if (captionUrl && (captionUrl.startsWith('http://') || captionUrl.startsWith('https://'))) {
+      try {
+        const https = require('https')
+        const http = require('http')
+
+        captionContent = await new Promise((resolve, reject) => {
+          const client = captionUrl.startsWith('https') ? https : http
+
+          client.get(captionUrl, (res) => {
+            let data = ''
+            res.on('data', chunk => data += chunk)
+            res.on('end', () => resolve(data))
+            res.on('error', reject)
+          }).on('error', reject)
+        })
+
+        logger.info(`Downloaded caption from remote URL: ${captionUrl}`)
+        return captionContent
+      } catch (error) {
+        logger.error('Error downloading remote caption:', error)
+      }
+    }
+
+    // Fallback: Try local file paths
     const possiblePaths = [
       `/data/captions/${video.uuid}-en.vtt`,
       `/data/captions/${video.uuid}.vtt`,
@@ -240,7 +426,12 @@ async function getVideoTranscript(video) {
       `/var/www/peertube/storage/captions/${video.uuid}-es.vtt`
     ]
 
-    // Also check for any language code
+    // If we have a local caption path from the API, add it to the list
+    if (captionUrl && !captionUrl.startsWith('http')) {
+      possiblePaths.unshift(captionUrl)
+    }
+
+    // Also check for any language code in local directories
     const captionDirs = ['/data/captions', '/var/www/peertube/storage/captions']
     for (const dir of captionDirs) {
       try {
@@ -254,18 +445,18 @@ async function getVideoTranscript(video) {
       }
     }
 
-    // Try to find and read VTT file
+    // Try to find and read VTT file locally
     for (const filePath of possiblePaths) {
       try {
         const content = await fs.readFile(filePath, 'utf-8')
-        logger.info(`Found caption file at: ${filePath}`)
+        logger.info(`Found local caption file at: ${filePath}`)
         return content
       } catch {
         // File doesn't exist, try next
       }
     }
 
-    logger.info(`No caption files found for video ${video.uuid}`)
+    logger.info(`No caption files found (local or remote) for video ${video.uuid}`)
   } catch (error) {
     logger.error('Error getting video transcript:', error)
   }
