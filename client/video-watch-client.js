@@ -75,11 +75,9 @@ async function addProcessButton(video, peertubeHelpers) {
 
         setTimeout(() => {
           // Find the dropdown menu - look for the menu that appears after clicking
-          const dropdownMenu = document.querySelector('div[ngbdropdownmenu]') ||
-                              document.querySelector('.dropdown-menu.show') ||
-                              document.querySelector('[role="menu"].dropdown-menu') ||
-                              document.querySelector('button[ngbdropdowntoggle] + div.dropdown-menu') ||
-                              document.querySelector('.dropdown-menu:not([hidden])')
+          // Find attribute on dropdownButton that starts with _ngcontent-ng-
+          const ngAttribute = dropdownButton.getAttributeNames().find(name => name.startsWith('_ngcontent-ng-'))
+          const dropdownMenu = document.querySelector('.dropdown-menu[' + ngAttribute + ']');
 
           if (dropdownMenu && !dropdownMenu.querySelector('.ai-chat-process-btn')) {
             console.log('[AI Chat] Adding process button to menu')
