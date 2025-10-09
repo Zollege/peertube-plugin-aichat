@@ -35,8 +35,8 @@ async function initialize(services) {
     isConnected = true
     logger.info('Connected to PostgreSQL database')
 
-    // Register pgvector
-    await pgvector.registerTypes(dbClient)
+    // Register pgvector type
+    await pgvector.registerType(dbClient)
 
     // Create tables with pgvector support
     await createTables()
