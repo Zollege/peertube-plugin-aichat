@@ -73,8 +73,39 @@ async function extractVideoSnapshots(video) {
 
   logger.info(`Using snapshot interval of ${interval} seconds for video ${video.uuid}`)
 
+  // IMPORTANT: First, try to load the complete video object
+  // The video object passed to hooks might be minimal
+  let fullVideo = video
+  try {
+    logger.info(`Loading full video details for ${video.uuid}`)
+    fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid || video.id)
+    if (fullVideo) {
+      logger.info(`Loaded full video object with keys: ${Object.keys(fullVideo).join(', ')}`)
+
+      // Log specific file-related properties
+      if (fullVideo.files) {
+        logger.info(`fullVideo.files exists with ${fullVideo.files.length} files`)
+        if (fullVideo.files.length > 0) {
+          logger.info(`First file properties: ${Object.keys(fullVideo.files[0]).join(', ')}`)
+        }
+      }
+      if (fullVideo.webtorrentFiles) {
+        logger.info(`fullVideo.webtorrentFiles exists with ${fullVideo.webtorrentFiles.length} files`)
+      }
+      if (fullVideo.streamingPlaylists) {
+        logger.info(`fullVideo.streamingPlaylists exists with ${fullVideo.streamingPlaylists.length} playlists`)
+      }
+    } else {
+      logger.warn(`Could not load full video details, using original video object`)
+      fullVideo = video
+    }
+  } catch (error) {
+    logger.error(`Error loading full video:`, error)
+    fullVideo = video
+  }
+
   const dataPath = peertubeHelpers.plugin.getDataDirectoryPath()
-  const snapshotsDir = path.join(dataPath, 'snapshots', video.uuid)
+  const snapshotsDir = path.join(dataPath, 'snapshots', fullVideo.uuid)
 
   // Create directory
   await fs.mkdir(snapshotsDir, { recursive: true })
@@ -82,16 +113,22 @@ async function extractVideoSnapshots(video) {
   // Get video file path
   let videoPath
   try {
-    // Log the initial video object to understand its structure
-    logger.debug(`Initial video object keys: ${Object.keys(video).join(', ')}`)
+    // Now use the full video object
+    logger.info(`Searching for video file URL for ${fullVideo.uuid}`)
 
-    // Check if the video object already has file information
-    if (video.files && video.files.length > 0) {
-      logger.info(`Video object has ${video.files.length} files`)
-      const file = video.files.find(f => f.fileUrl) || video.files[0]
-      if (file && file.fileUrl) {
-        videoPath = file.fileUrl
-        logger.info(`Found video file URL in initial object: ${videoPath}`)
+    // Check if the full video object has file information
+    if (fullVideo.files && fullVideo.files.length > 0) {
+      logger.info(`Full video object has ${fullVideo.files.length} files`)
+      const file = fullVideo.files.find(f => f.fileUrl) || fullVideo.files[0]
+      if (file) {
+        logger.info(`File object keys: ${Object.keys(file).join(', ')}`)
+        if (file.fileUrl) {
+          videoPath = file.fileUrl
+          logger.info(`Found video file URL: ${videoPath}`)
+        } else if (file.fileDownloadUrl) {
+          videoPath = file.fileDownloadUrl
+          logger.info(`Found video download URL: ${videoPath}`)
+        }
       }
     }
 
@@ -136,92 +173,52 @@ async function extractVideoSnapshots(video) {
     }
 
     // Approach 3: Check if video has streamingPlaylists (for HLS)
-    if (!videoPath && video.streamingPlaylists && video.streamingPlaylists.length > 0) {
-      const playlist = video.streamingPlaylists[0]
+    if (!videoPath && fullVideo.streamingPlaylists && fullVideo.streamingPlaylists.length > 0) {
+      logger.info(`Checking ${fullVideo.streamingPlaylists.length} streaming playlists`)
+      const playlist = fullVideo.streamingPlaylists[0]
       if (playlist.files && playlist.files.length > 0) {
+        logger.info(`Playlist has ${playlist.files.length} files`)
         // Use the first available file
         const file = playlist.files[0]
-        videoPath = file.fileUrl || file.torrentUrl
-        logger.info(`Using streaming playlist file: ${videoPath}`)
+        if (file) {
+          logger.info(`Playlist file keys: ${Object.keys(file).join(', ')}`)
+          videoPath = file.fileUrl || file.fileDownloadUrl || file.torrentUrl
+          if (videoPath) {
+            logger.info(`Using streaming playlist file: ${videoPath}`)
+          }
+        }
       }
     }
 
-    // Approach 4: Check for remote files (object storage like S3/Spaces)
-    if (!videoPath && video.files && video.files.length > 0) {
-      // Sort by resolution to get best quality first
-      const sortedFiles = [...video.files].sort((a, b) => (b.resolution || 0) - (a.resolution || 0))
-      for (const file of sortedFiles) {
-        if (file.fileUrl) {
-          videoPath = file.fileUrl
-          logger.info(`Using remote video file URL: ${videoPath}`)
-          break
+    // Approach 4: Check for webtorrent files
+    if (!videoPath && fullVideo.webtorrentFiles && fullVideo.webtorrentFiles.length > 0) {
+      logger.info(`Checking ${fullVideo.webtorrentFiles.length} webtorrent files`)
+      const file = fullVideo.webtorrentFiles.find(f => f.fileUrl || f.fileDownloadUrl) || fullVideo.webtorrentFiles[0]
+      if (file) {
+        logger.info(`Webtorrent file keys: ${Object.keys(file).join(', ')}`)
+        videoPath = file.fileUrl || file.fileDownloadUrl
+        if (videoPath) {
+          logger.info(`Using webtorrent file: ${videoPath}`)
         }
       }
     }
 
-    // Approach 5: Try to get more complete video information from PeerTube
-    if (!videoPath) {
-      // Note: video.url is typically the watch page URL, not the video file URL
-      if (video.url) {
-        logger.debug(`Video watch URL: ${video.url}`)
-      }
-
-      // Try to get video details with more complete information
-      try {
-        const fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
-        if (fullVideo) {
-          // Log available properties for debugging
-          logger.debug(`Full video properties: ${Object.keys(fullVideo).join(', ')}`)
-
-          // Check for files in the full video object
-          if (fullVideo.files && fullVideo.files.length > 0) {
-            logger.info(`Found ${fullVideo.files.length} files in full video object`)
-            const file = fullVideo.files.find(f => f.fileUrl) || fullVideo.files[0]
-            if (file) {
-              logger.debug(`File object properties: ${Object.keys(file).join(', ')}`)
-              if (file.fileUrl) {
-                videoPath = file.fileUrl
-                logger.info(`Found remote file URL from full video: ${videoPath}`)
-              } else if (file.magnetUri) {
-                logger.info(`File has magnetUri but no fileUrl`)
-              }
-            }
-          }
-
-          // Check for webtorrent files
-          if (!videoPath && fullVideo.webtorrentFiles && fullVideo.webtorrentFiles.length > 0) {
-            const file = fullVideo.webtorrentFiles.find(f => f.fileUrl) || fullVideo.webtorrentFiles[0]
-            if (file && file.fileUrl) {
-              videoPath = file.fileUrl
-              logger.info(`Found webtorrent file URL: ${videoPath}`)
-            }
-          }
-
-          // Check for HLS files
-          if (!videoPath && fullVideo.streamingPlaylists && fullVideo.streamingPlaylists.length > 0) {
-            const playlist = fullVideo.streamingPlaylists[0]
-            if (playlist.playlistUrl) {
-              // For HLS, we might need to use the playlist URL
-              // FFmpeg can handle m3u8 playlists directly
-              videoPath = playlist.playlistUrl
-              logger.info(`Using HLS playlist URL: ${videoPath}`)
-            } else if (playlist.files && playlist.files.length > 0) {
-              const file = playlist.files.find(f => f.fileUrl) || playlist.files[0]
-              if (file && file.fileUrl) {
-                videoPath = file.fileUrl
-                logger.info(`Found HLS file URL: ${videoPath}`)
-              }
-            }
-          }
-        }
-      } catch (error) {
-        logger.error('Error loading full video details:', error)
+    // Approach 5: Check for playlist URLs directly
+    if (!videoPath && fullVideo.streamingPlaylists && fullVideo.streamingPlaylists.length > 0) {
+      const playlist = fullVideo.streamingPlaylists[0]
+      if (playlist.playlistUrl) {
+        // For HLS, we can use the playlist URL directly
+        // FFmpeg can handle m3u8 playlists
+        videoPath = playlist.playlistUrl
+        logger.info(`Using HLS playlist URL: ${videoPath}`)
+      } else {
+        logger.info(`Playlist object keys: ${Object.keys(playlist).join(', ')}`)
       }
     }
 
     if (!videoPath) {
-      logger.warn(`No video file found (local or remote) for ${video.uuid}, skipping snapshot extraction`)
-      logger.debug(`Video object keys: ${Object.keys(video).join(', ')}`)
+      logger.warn(`No video file found (local or remote) for ${fullVideo.uuid}, skipping snapshot extraction`)
+      logger.info(`Full video object keys available: ${Object.keys(fullVideo).join(', ')}`)
       return // Skip snapshot extraction but continue processing
     }
   } catch (error) {
@@ -229,8 +226,10 @@ async function extractVideoSnapshots(video) {
     return // Skip snapshot extraction but continue processing
   }
 
-  const duration = video.duration
+  const duration = fullVideo.duration || video.duration
   const snapshots = []
+
+  logger.info(`Processing video snapshots: URL=${videoPath}, Duration=${duration}s`)
 
   // Extract snapshots at intervals
   for (let timestamp = 0; timestamp < duration; timestamp += interval) {
