@@ -78,7 +78,13 @@ async function extractVideoSnapshots(video) {
   let fullVideo = video
   try {
     logger.info(`Loading full video details for ${video.uuid}`)
-    const videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid || video.id)
+
+    // Try different loading methods to get the full video with files
+    let videoModel = null
+
+    // Method 1: Try loadByIdOrUUID
+    videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid || video.id)
+
     if (videoModel) {
       logger.info(`Loaded video model with keys: ${Object.keys(videoModel).join(', ')}`)
 
@@ -101,6 +107,8 @@ async function extractVideoSnapshots(video) {
         }
         // Add VideoFiles to fullVideo for easier access
         fullVideo.VideoFiles = videoModel.VideoFiles
+      } else {
+        logger.info('VideoFiles not loaded with model, will try to fetch separately')
       }
 
       // Check for VideoStreamingPlaylists (Sequelize association)
@@ -124,6 +132,37 @@ async function extractVideoSnapshots(video) {
         }
         // Add to fullVideo for easier access
         fullVideo.VideoStreamingPlaylists = videoModel.VideoStreamingPlaylists
+      } else {
+        logger.info('VideoStreamingPlaylists not loaded with model')
+      }
+
+      // If no files were loaded, try to get them through the API
+      if ((!videoModel.VideoFiles || videoModel.VideoFiles.length === 0) &&
+          (!videoModel.VideoStreamingPlaylists || videoModel.VideoStreamingPlaylists.length === 0)) {
+        logger.info('No files loaded with model, attempting to fetch video with full details')
+
+        // Try to get video details through other means
+        try {
+          // Method 2: Try to get video by UUID with a fresh load
+          const videoId = fullVideo.id || video.id
+          if (videoId) {
+            logger.info(`Attempting to reload video by ID: ${videoId}`)
+            const reloadedVideo = await peertubeHelpers.videos.loadByIdOrUUID(videoId)
+            if (reloadedVideo) {
+              logger.info(`Reloaded video has files: VideoFiles=${!!reloadedVideo.VideoFiles}, StreamingPlaylists=${!!reloadedVideo.VideoStreamingPlaylists}`)
+              if (reloadedVideo.VideoFiles && reloadedVideo.VideoFiles.length > 0) {
+                fullVideo.VideoFiles = reloadedVideo.VideoFiles
+                logger.info(`Added ${reloadedVideo.VideoFiles.length} VideoFiles from reload`)
+              }
+              if (reloadedVideo.VideoStreamingPlaylists && reloadedVideo.VideoStreamingPlaylists.length > 0) {
+                fullVideo.VideoStreamingPlaylists = reloadedVideo.VideoStreamingPlaylists
+                logger.info(`Added ${reloadedVideo.VideoStreamingPlaylists.length} StreamingPlaylists from reload`)
+              }
+            }
+          }
+        } catch (e) {
+          logger.debug('Could not reload video:', e.message)
+        }
       }
     } else {
       logger.warn(`Could not load full video details, using original video object`)
@@ -213,11 +252,85 @@ async function extractVideoSnapshots(video) {
       try {
         const videoFiles = await peertubeHelpers.videos.getFiles(video.id)
         if (videoFiles && videoFiles.length > 0) {
-          videoPath = videoFiles[0].path || videoFiles[0].fileUrl
-          logger.info(`Found video file via helpers: ${videoPath}`)
+          logger.info(`Found ${videoFiles.length} files via getFiles helper`)
+          for (const file of videoFiles) {
+            logger.info(`Helper file data: ${JSON.stringify(file)}`)
+            if (file.fileUrl || file.path) {
+              videoPath = file.fileUrl || file.path
+              logger.info(`Found video file via helpers: ${videoPath}`)
+              break
+            }
+          }
         }
       } catch (e) {
         logger.debug('Could not get files via helpers:', e.message)
+      }
+    }
+
+    // Approach 1b: Try to make an API request to get video details
+    if (!videoPath && fullVideo.uuid) {
+      try {
+        logger.info('Attempting to fetch video details via API')
+        // Build the API URL - this is a common PeerTube API endpoint
+        const apiBase = peertubeHelpers.config?.getWebserverUrl?.() || ''
+        if (apiBase) {
+          const apiUrl = `${apiBase}/api/v1/videos/${fullVideo.uuid}`
+          logger.info(`Fetching video from API: ${apiUrl}`)
+
+          // Use Node's built-in https module
+          const https = require('https')
+          const http = require('http')
+
+          const videoData = await new Promise((resolve, reject) => {
+            const client = apiUrl.startsWith('https') ? https : http
+
+            client.get(apiUrl, (res) => {
+              let data = ''
+              res.on('data', chunk => data += chunk)
+              res.on('end', () => {
+                try {
+                  resolve(JSON.parse(data))
+                } catch (e) {
+                  reject(e)
+                }
+              })
+              res.on('error', reject)
+            }).on('error', reject)
+          })
+
+          if (videoData) {
+            logger.info(`API response has properties: ${Object.keys(videoData).join(', ')}`)
+
+            // Check for files in API response
+            if (videoData.files && videoData.files.length > 0) {
+              logger.info(`API returned ${videoData.files.length} files`)
+              const file = videoData.files[0]
+              logger.info(`API file data: ${JSON.stringify(file)}`)
+              if (file.fileUrl) {
+                videoPath = file.fileUrl
+                logger.info(`Found video URL from API: ${videoPath}`)
+              }
+            }
+
+            // Check for streaming playlists in API response
+            if (!videoPath && videoData.streamingPlaylists && videoData.streamingPlaylists.length > 0) {
+              const playlist = videoData.streamingPlaylists[0]
+              logger.info(`API playlist data: ${JSON.stringify(playlist)}`)
+              if (playlist.playlistUrl) {
+                videoPath = playlist.playlistUrl
+                logger.info(`Found playlist URL from API: ${videoPath}`)
+              } else if (playlist.files && playlist.files.length > 0) {
+                const file = playlist.files[0]
+                if (file.fileUrl) {
+                  videoPath = file.fileUrl
+                  logger.info(`Found file URL from API playlist: ${videoPath}`)
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        logger.debug('Could not fetch video via API:', e.message)
       }
     }
 
