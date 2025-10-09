@@ -20,14 +20,14 @@ A PeerTube plugin that adds an AI-powered chat interface alongside videos, allow
 
 #### 2.1 Data Collection
 - **Video Snapshots**:
-  - Capture frames every 5 seconds
+  - Capture frames at configurable intervals (1-60 seconds, default: 5 seconds)
   - Store as file references in plugin data directory
   - Include timestamp metadata for precise navigation
   - Process via OpenAI Vision API for scene understanding
 
 - **Timestamps & Chapters**:
   - Extract video chapters if available
-  - Create automatic timestamp markers every 5 seconds
+  - Create automatic timestamp markers based on snapshot interval
   - Link responses to specific video moments
 
 - **Transcripts**:
@@ -92,7 +92,7 @@ A PeerTube plugin that adds an AI-powered chat interface alongside videos, allow
   - Temperature and other parameters
 
 - **Processing Settings**:
-  - Snapshot interval (fixed at 5 seconds)
+  - Snapshot interval (configurable: 1-60 seconds, default: 5)
   - Enable/disable for specific videos
   - Auto-process new uploads (enabled by default)
   - Batch processing for existing videos
@@ -186,7 +186,7 @@ A PeerTube plugin that adds an AI-powered chat interface alongside videos, allow
 - OpenAI integration (GPT-4 Vision + embeddings)
 - Admin settings for API key
 - Automatic video processing on upload
-- Snapshot extraction every 5 seconds
+- Configurable snapshot extraction (1-60 seconds)
 - PeerTube transcript integration
 - Full UI with timestamps and cross-references
 
