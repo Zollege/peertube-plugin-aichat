@@ -1,4 +1,4 @@
-# PeerTube AI Chat Plugin
+# PeerTube AI Chat Plugin (peertube-plugin-aichat)
 
 An AI-powered chat plugin for PeerTube that allows viewers to ask questions about video content and receive intelligent responses using OpenAI's GPT-4.
 
@@ -46,10 +46,10 @@ npm run build
 2. **Install on PeerTube**:
 ```bash
 # Using PeerTube CLI
-peertube-cli plugins install --path /path/to/peertube-plugin-ai-chat
+peertube-cli plugins install --path /path/to/peertube-plugin-aichat
 
 # Or copy to PeerTube plugins directory
-cp -r peertube-plugin-ai-chat /var/www/peertube/storage/plugins/
+cp -r peertube-plugin-aichat /var/www/peertube/storage/plugins/
 ```
 
 3. **Configure the plugin**:
@@ -93,17 +93,17 @@ cp -r peertube-plugin-ai-chat /var/www/peertube/storage/plugins/
 
 ## API Endpoints
 
-- `POST /plugins/ai-chat/router/chat/send` - Send a chat message
-- `GET /plugins/ai-chat/router/chat/history/:videoId` - Get chat history
-- `GET /plugins/ai-chat/router/processing/status/:videoUuid` - Check processing status
-- `POST /plugins/ai-chat/router/processing/trigger/:videoUuid` - Manually trigger processing (admin only)
+- `POST /plugins/aichat/router/chat/send` - Send a chat message
+- `GET /plugins/aichat/router/chat/history/:videoId` - Get chat history
+- `GET /plugins/aichat/router/processing/status/:videoUuid` - Check processing status
+- `POST /plugins/aichat/router/processing/trigger/:videoUuid` - Manually trigger processing (admin only)
 
 ## Development
 
 ### Project Structure
 
 ```
-peertube-plugin-ai-chat/
+peertube-plugin-aichat/
 ├── client/                  # Client-side code
 │   ├── common-client-plugin.js
 │   └── video-watch-client.js

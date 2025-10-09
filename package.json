@@ -1,9 +1,10 @@
 {
-  "name": "peertube-plugin-ai-chat",
+  "name": "peertube-plugin-aichat",
   "description": "AI-powered chat plugin for PeerTube videos using OpenAI",
   "version": "0.1.0",
+  "license": "AGPL-3.0",
   "author": "AI Chat Plugin Team",
-  "bugs": "https://github.com/yourusername/peertube-plugin-ai-chat/issues",
+  "bugs": "https://github.com/yourusername/peertube-plugin-aichat/issues",
   "clientScripts": [
     {
       "script": "dist/common-client-plugin.js",
@@ -24,7 +25,7 @@
   "engine": {
     "peertube": ">=5.0.0"
   },
-  "homepage": "https://github.com/yourusername/peertube-plugin-ai-chat",
+  "homepage": "https://github.com/yourusername/peertube-plugin-aichat",
   "keywords": [
     "peertube",
     "plugin",
