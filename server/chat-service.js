@@ -1,4 +1,5 @@
 const openaiService = require('./openai-service')
+const databaseService = require('./database-service')
 
 let logger = null
 let settingsManager = null
@@ -19,7 +20,7 @@ async function handleChatMessage(videoId, videoUuid, message, userId) {
   const context = await getVideoContext(videoUuid, message)
 
   // Generate response
-  const response = await generateChatResponse(message, context, videoId, userId)
+  const response = await generateChatResponse(message, context, videoId, videoUuid, userId)
 
   return response
 }
@@ -28,43 +29,19 @@ async function getVideoContext(videoUuid, query) {
   if (!openaiService.isInitialized()) return null
 
   try {
-    const sequelize = peertubeHelpers.database.sequelize
-
     // Generate embedding for the query
     const queryEmbedding = await openaiService.generateEmbedding(query)
 
-    // Find similar chunks using pgvector
-    const [similarChunks] = await sequelize.query(`
-      SELECT content, start_time, end_time,
-             embedding <-> $2::vector as distance
-      FROM plugin_ai_video_embeddings
-      WHERE video_uuid = $1 AND embedding IS NOT NULL
-      ORDER BY distance
-      LIMIT 5;
-    `, {
-      bind: [videoUuid, `[${queryEmbedding.join(',')}]`]
-    })
+    // Find similar chunks using pgvector or fallback
+    const similarChunks = await databaseService.findSimilarChunks(videoUuid, queryEmbedding, 5)
 
     // Get relevant snapshots based on the time ranges of similar chunks
     let snapshots = []
     if (similarChunks.length > 0) {
-      const minTime = Math.min(...similarChunks.map(c => c.start_time))
-      const maxTime = Math.max(...similarChunks.map(c => c.end_time))
+      const minTime = Math.min(...similarChunks.map(c => c.startTime || c.start_time || 0))
+      const maxTime = Math.max(...similarChunks.map(c => c.endTime || c.end_time || 0))
 
-      const [relevantSnapshots] = await sequelize.query(`
-        SELECT timestamp, description
-        FROM plugin_ai_video_snapshots
-        WHERE video_uuid = $1
-          AND description IS NOT NULL
-          AND timestamp >= $2
-          AND timestamp <= $3
-        ORDER BY timestamp
-        LIMIT 10;
-      `, {
-        bind: [videoUuid, minTime, maxTime]
-      })
-
-      snapshots = relevantSnapshots
+      snapshots = await databaseService.getVideoSnapshots(videoUuid, minTime, maxTime)
     }
 
     return {
@@ -77,7 +54,7 @@ async function getVideoContext(videoUuid, query) {
   }
 }
 
-async function generateChatResponse(message, context, videoId, userId) {
+async function generateChatResponse(message, context, videoId, videoUuid, userId) {
   const systemPrompt = await settingsManager.getSetting('system-prompt')
   const model = await settingsManager.getSetting('openai-model')
   const maxTokens = parseInt(await settingsManager.getSetting('max-tokens') || '1000')
@@ -89,8 +66,8 @@ async function generateChatResponse(message, context, videoId, userId) {
     if (context.transcriptChunks && context.transcriptChunks.length > 0) {
       contextMessage += '\n\nRelevant transcript sections:\n'
       context.transcriptChunks.forEach(chunk => {
-        const startTime = formatTime(chunk.start_time)
-        const endTime = formatTime(chunk.end_time)
+        const startTime = formatTime(chunk.startTime || chunk.start_time)
+        const endTime = formatTime(chunk.endTime || chunk.end_time)
         contextMessage += `[${startTime} - ${endTime}]: ${chunk.content}\n`
       })
     }
@@ -99,7 +76,7 @@ async function generateChatResponse(message, context, videoId, userId) {
       contextMessage += '\n\nVideo visual descriptions:\n'
       context.snapshots.forEach(snapshot => {
         const time = formatTime(snapshot.timestamp)
-        contextMessage += `[${time}]: ${snapshot.description}\n`
+        contextMessage += `[${time}]: ${snapshot.description || 'Visual at this timestamp'}\n`
       })
     }
   }
@@ -124,22 +101,11 @@ async function generateChatResponse(message, context, videoId, userId) {
   const timestamps = extractTimestamps(responseContent)
 
   // Save to chat history
-  const sequelize = peertubeHelpers.database.sequelize
-  await sequelize.query(`
-    INSERT INTO plugin_ai_chat_sessions (video_id, user_id, message, response)
-    VALUES ($1, $2, $3, $4);
-  `, {
-    bind: [videoId, userId, message, responseContent]
-  })
+  await databaseService.saveChatMessage(videoId, videoUuid, userId, message, responseContent)
 
   // Track API usage
   if (aiResponse.usage) {
-    await sequelize.query(`
-      INSERT INTO plugin_ai_api_usage (user_id, endpoint, tokens_used)
-      VALUES ($1, $2, $3);
-    `, {
-      bind: [userId, 'chat', aiResponse.usage.total_tokens]
-    })
+    await databaseService.trackAPIUsage(userId, 'chat', aiResponse.usage.total_tokens)
   }
 
   return {
@@ -149,22 +115,14 @@ async function generateChatResponse(message, context, videoId, userId) {
 }
 
 async function getChatHistory(videoId, userId) {
-  const sequelize = peertubeHelpers.database.sequelize
-
-  const [history] = await sequelize.query(`
-    SELECT message, response, created_at
-    FROM plugin_ai_chat_sessions
-    WHERE video_id = $1 AND ($2::int IS NULL OR user_id = $2)
-    ORDER BY created_at DESC
-    LIMIT 50;
-  `, {
-    bind: [videoId, userId || null]
-  })
-
-  return history
+  return await databaseService.getChatHistory(videoId, userId)
 }
 
 function formatTime(seconds) {
+  if (seconds === null || seconds === undefined) {
+    return '0:00'
+  }
+
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   const secs = Math.floor(seconds % 60)

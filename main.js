@@ -60,12 +60,25 @@ async function register({
 }
 
 async function unregister() {
+  // Disconnect from external database if connected
+  await databaseService.disconnect()
+
   if (logger) {
     logger.info('AI Chat plugin unregistered')
   }
 }
 
 async function registerSettings(registerSetting) {
+  // Database URL for pgvector
+  registerSetting({
+    name: 'database-url',
+    label: 'PostgreSQL Database URL',
+    type: 'input-password',
+    descriptionHTML: 'PostgreSQL connection URL with pgvector extension (e.g., postgres://user:pass@host:5432/dbname)',
+    private: true,
+    default: ''
+  })
+
   // OpenAI API Key
   registerSetting({
     name: 'openai-api-key',
