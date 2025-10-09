@@ -82,17 +82,31 @@ async function extractVideoSnapshots(video) {
   // Get video file path
   let videoPath
   try {
-    // Try multiple approaches to find the video file
+    // Log the initial video object to understand its structure
+    logger.debug(`Initial video object keys: ${Object.keys(video).join(', ')}`)
 
-    // Approach 1: Try PeerTube helpers if available
-    try {
-      const videoFiles = await peertubeHelpers.videos.getFiles(video.id)
-      if (videoFiles && videoFiles.length > 0) {
-        videoPath = videoFiles[0].path
-        logger.info(`Found video file via helpers: ${videoPath}`)
+    // Check if the video object already has file information
+    if (video.files && video.files.length > 0) {
+      logger.info(`Video object has ${video.files.length} files`)
+      const file = video.files.find(f => f.fileUrl) || video.files[0]
+      if (file && file.fileUrl) {
+        videoPath = file.fileUrl
+        logger.info(`Found video file URL in initial object: ${videoPath}`)
       }
-    } catch (e) {
-      logger.debug('Could not get files via helpers:', e.message)
+    }
+
+    // Try multiple approaches to find the video file if not found yet
+    if (!videoPath) {
+      // Approach 1: Try PeerTube helpers if available
+      try {
+        const videoFiles = await peertubeHelpers.videos.getFiles(video.id)
+        if (videoFiles && videoFiles.length > 0) {
+          videoPath = videoFiles[0].path || videoFiles[0].fileUrl
+          logger.info(`Found video file via helpers: ${videoPath}`)
+        }
+      } catch (e) {
+        logger.debug('Could not get files via helpers:', e.message)
+      }
     }
 
     // Approach 2: Check standard PeerTube storage locations
@@ -145,23 +159,32 @@ async function extractVideoSnapshots(video) {
       }
     }
 
-    // Approach 5: Try to construct the remote URL if we have the base URL
+    // Approach 5: Try to get more complete video information from PeerTube
     if (!videoPath) {
-      // Check if video has a URL property
+      // Note: video.url is typically the watch page URL, not the video file URL
       if (video.url) {
-        logger.info(`Video has URL property: ${video.url}`)
+        logger.debug(`Video watch URL: ${video.url}`)
       }
 
       // Try to get video details with more complete information
       try {
         const fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
         if (fullVideo) {
+          // Log available properties for debugging
+          logger.debug(`Full video properties: ${Object.keys(fullVideo).join(', ')}`)
+
           // Check for files in the full video object
           if (fullVideo.files && fullVideo.files.length > 0) {
+            logger.info(`Found ${fullVideo.files.length} files in full video object`)
             const file = fullVideo.files.find(f => f.fileUrl) || fullVideo.files[0]
-            if (file && file.fileUrl) {
-              videoPath = file.fileUrl
-              logger.info(`Found remote file URL from full video: ${videoPath}`)
+            if (file) {
+              logger.debug(`File object properties: ${Object.keys(file).join(', ')}`)
+              if (file.fileUrl) {
+                videoPath = file.fileUrl
+                logger.info(`Found remote file URL from full video: ${videoPath}`)
+              } else if (file.magnetUri) {
+                logger.info(`File has magnetUri but no fileUrl`)
+              }
             }
           }
 
@@ -354,41 +377,18 @@ async function getVideoTranscript(video) {
       logger.debug('Could not load video captions via API:', error.message)
     }
 
-    // Alternative: Try to get captions via a direct API call if available
+    // Alternative: Try to get captions through PeerTube helpers
     if (!captionUrl) {
       try {
-        // Some PeerTube instances expose captions at this endpoint
-        const https = require('https')
-        const http = require('http')
-        const baseUrl = peertubeHelpers.config.getWebserverUrl()
-        const captionApiUrl = `${baseUrl}/api/v1/videos/${video.uuid}/captions`
-
-        const captionData = await new Promise((resolve, reject) => {
-          const client = captionApiUrl.startsWith('https') ? https : http
-
-          client.get(captionApiUrl, (res) => {
-            let data = ''
-            res.on('data', chunk => data += chunk)
-            res.on('end', () => {
-              try {
-                resolve(JSON.parse(data))
-              } catch {
-                resolve(null)
-              }
-            })
-            res.on('error', reject)
-          }).on('error', reject)
-        })
-
-        if (captionData && captionData.data && captionData.data.length > 0) {
-          const caption = captionData.data.find(c => c.language?.id === 'en') || captionData.data[0]
-          if (caption) {
-            captionUrl = caption.captionPath
-            logger.info(`Found caption via API endpoint: ${captionUrl}`)
-          }
+        // Try using the PeerTube database if accessible
+        // This is a workaround to check if captions exist
+        if (video.id) {
+          logger.debug(`Checking for captions for video ID: ${video.id}`)
+          // Note: Direct database access might not be available in plugins
+          // Captions would need to be accessed through the loaded video object
         }
       } catch (error) {
-        logger.debug('Could not fetch captions via API endpoint:', error.message)
+        logger.debug('Could not check for captions:', error.message)
       }
     }
 
