@@ -233,8 +233,45 @@ async function extractVideoSnapshots(video) {
   try {
     logger.info(`Constructing video URL directly from UUID: ${fullVideo.uuid}`)
 
-    // SIMPLE APPROACH: Just build the URL from what we know
-    // We know videos are stored at specific URLs with the UUID
+    // The actual structure on Spaces is:
+    // playlistshls/{video-uuid}/{file-uuid}-master.m3u8
+    // We need to get the file UUID from the StreamingPlaylists
+
+    // First, try to get the playlist URL from the video model
+    let playlistUrl = null
+    let fileUuid = null
+
+    // Check StreamingPlaylists for the actual file UUID
+    if (fullVideo.VideoStreamingPlaylists && fullVideo.VideoStreamingPlaylists.length > 0) {
+      const playlist = fullVideo.VideoStreamingPlaylists[0]
+      const playlistData = playlist.dataValues || playlist
+
+      // The playlist might have a playlistUrl or we need to check nested files
+      if (playlistData.playlistUrl) {
+        playlistUrl = playlistData.playlistUrl
+        logger.info(`Found playlist URL in model: ${playlistUrl}`)
+
+        // Extract the file UUID from the URL if present
+        const match = playlistUrl.match(/([a-f0-9-]{36})-master\.m3u8/)
+        if (match) {
+          fileUuid = match[1]
+          logger.info(`Extracted file UUID from playlist URL: ${fileUuid}`)
+        }
+      }
+
+      // Check for nested VideoFiles which might have the file UUID
+      if (!fileUuid && playlist.VideoFiles && playlist.VideoFiles.length > 0) {
+        const file = playlist.VideoFiles[0]
+        const fileData = file.dataValues || file
+        if (fileData.filename) {
+          const match = fileData.filename.match(/^([a-f0-9-]{36})/)
+          if (match) {
+            fileUuid = match[1]
+            logger.info(`Extracted file UUID from VideoFile: ${fileUuid}`)
+          }
+        }
+      }
+    }
 
     // Get configured CDN URLs and credentials
     const spacesStreamingUrl = await settingsManager.getSetting('spaces-streaming-url')
@@ -242,17 +279,30 @@ async function extractVideoSnapshots(video) {
     const accessKey = await settingsManager.getSetting('spaces-access-key')
     const secretKey = await settingsManager.getSetting('spaces-secret-key')
 
-    // Prefer streaming URL for HLS content
-    if (spacesStreamingUrl) {
+    // If we have a playlist URL from the model, use it
+    if (playlistUrl && playlistUrl.includes('http')) {
+      videoPath = playlistUrl
+      logger.info(`Using playlist URL from video model: ${videoPath}`)
+    }
+    // Otherwise, try to construct the URL
+    else if (spacesStreamingUrl) {
+      // For now, if we don't have the file UUID, we'll try using the video UUID
+      // Some videos might use the same UUID for both
+      const masterFileUuid = fileUuid || fullVideo.uuid
+
       if (accessKey && secretKey) {
-        // Generate signed URL for any video (public or private)
-        videoPath = await spacesService.getSignedVideoUrl(fullVideo.uuid, spacesStreamingUrl, true)
+        // Generate signed URL for streaming playlist
+        // Path structure: playlistshls/{video-uuid}/{file-uuid}-master.m3u8
+        videoPath = await spacesService.getSignedVideoUrl(
+          `${fullVideo.uuid}/${masterFileUuid}`,  // Pass both UUIDs
+          spacesStreamingUrl,
+          true
+        )
         logger.info(`Generated signed URL for video: ${videoPath}`)
       } else {
-        // No credentials - use direct URL (only works for public videos)
-        const prefix = await settingsManager.getSetting('spaces-streaming-prefix')
-        const filename = `${fullVideo.uuid}-master.m3u8`
-        videoPath = `${spacesStreamingUrl}/${prefix ? `${prefix}/` : ''}${filename}`
+        // No credentials - use direct URL
+        const prefix = await settingsManager.getSetting('spaces-streaming-prefix') || 'playlistshls'
+        videoPath = `${spacesStreamingUrl}/${prefix}/${fullVideo.uuid}/${masterFileUuid}-master.m3u8`
         logger.info(`Using direct streaming URL: ${videoPath}`)
       }
     } else if (spacesVideosUrl) {

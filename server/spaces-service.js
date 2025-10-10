@@ -89,16 +89,25 @@ async function getSignedVideoUrl(videoUuid, baseUrl, isStreamingPlaylist = true)
   try {
     // Get the appropriate prefix
     const prefix = isStreamingPlaylist
-      ? await settingsManager.getSetting('spaces-streaming-prefix')
+      ? await settingsManager.getSetting('spaces-streaming-prefix') || 'playlistshls'
       : await settingsManager.getSetting('spaces-videos-prefix')
 
-    // Determine the object key based on video type
-    const filename = isStreamingPlaylist
-      ? `${videoUuid}-master.m3u8`
-      : `${videoUuid}-720.mp4`
-
-    // Combine prefix and filename
-    const objectKey = prefix ? `${prefix}/${filename}` : filename
+    // Handle nested path for streaming playlists
+    // videoUuid might be "video-uuid/file-uuid" for streaming
+    let objectKey
+    if (isStreamingPlaylist && videoUuid.includes('/')) {
+      // Already has the nested structure
+      const parts = videoUuid.split('/')
+      const videoId = parts[0]
+      const fileId = parts[1]
+      objectKey = prefix ? `${prefix}/${videoId}/${fileId}-master.m3u8` : `${videoId}/${fileId}-master.m3u8`
+    } else {
+      // Simple structure
+      const filename = isStreamingPlaylist
+        ? `${videoUuid}-master.m3u8`
+        : `${videoUuid}-720.mp4`
+      objectKey = prefix ? `${prefix}/${filename}` : filename
+    }
 
     const signedUrl = await generateSignedUrl(baseUrl, objectKey)
 
