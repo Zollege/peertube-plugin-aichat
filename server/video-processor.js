@@ -228,41 +228,51 @@ async function extractVideoSnapshots(video) {
   // Create directory
   await fs.mkdir(snapshotsDir, { recursive: true })
 
-  // Get video file path
+  // Get video file path - we'll construct it directly from the UUID
   let videoPath
   try {
-    // Now use the full video object
-    logger.info(`Searching for video file URL for ${fullVideo.uuid}`)
+    logger.info(`Constructing video URL directly from UUID: ${fullVideo.uuid}`)
 
-    // Check VideoFiles from Sequelize model - check both original and reloaded data
-    const videoFilesToCheck = fullVideo.VideoFiles || []
-    if (videoFilesToCheck.length > 0) {
-      logger.info(`Checking ${videoFilesToCheck.length} VideoFiles for URLs`)
-      for (const file of videoFilesToCheck) {
-        const fileData = file.dataValues || file
-        logger.info(`VideoFile data: ${JSON.stringify(fileData)}`)
+    // SIMPLE APPROACH: Just build the URL from what we know
+    // We know videos are stored at specific URLs with the UUID
 
-        // Check for various URL properties
-        // Note: fileUrl might be a signed URL for private videos
-        if (fileData.fileUrl) {
-          videoPath = fileData.fileUrl
-          logger.info(`Found video file URL: ${videoPath}`)
-          // Check if it's a signed URL
-          if (videoPath.includes('X-Amz-Signature') || videoPath.includes('signature=')) {
-            logger.info('URL appears to be signed/authenticated')
-          }
-          break
-        } else if (fileData.torrentUrl) {
-          // We might be able to get the actual file URL from the torrent
-          logger.info(`File has torrentUrl but no direct fileUrl: ${fileData.torrentUrl}`)
-        }
+    // Get configured CDN URLs and credentials
+    const spacesStreamingUrl = await settingsManager.getSetting('spaces-streaming-url')
+    const spacesVideosUrl = await settingsManager.getSetting('spaces-videos-url')
+    const accessKey = await settingsManager.getSetting('spaces-access-key')
+    const secretKey = await settingsManager.getSetting('spaces-secret-key')
+
+    // Prefer streaming URL for HLS content
+    if (spacesStreamingUrl) {
+      if (accessKey && secretKey) {
+        // Generate signed URL for any video (public or private)
+        videoPath = await spacesService.getSignedVideoUrl(fullVideo.uuid, spacesStreamingUrl, true)
+        logger.info(`Generated signed URL for video: ${videoPath}`)
+      } else {
+        // No credentials - use direct URL (only works for public videos)
+        const prefix = await settingsManager.getSetting('spaces-streaming-prefix')
+        const filename = `${fullVideo.uuid}-master.m3u8`
+        videoPath = `${spacesStreamingUrl}/${prefix ? `${prefix}/` : ''}${filename}`
+        logger.info(`Using direct streaming URL: ${videoPath}`)
+      }
+    } else if (spacesVideosUrl) {
+      if (accessKey && secretKey) {
+        // Generate signed URL for web videos
+        videoPath = await spacesService.getSignedVideoUrl(fullVideo.uuid, spacesVideosUrl, false)
+        logger.info(`Generated signed URL for web video: ${videoPath}`)
+      } else {
+        // Direct URL for web videos
+        const prefix = await settingsManager.getSetting('spaces-videos-prefix')
+        const filename = `${fullVideo.uuid}-720.mp4`
+        videoPath = `${spacesVideosUrl}/${prefix ? `${prefix}/` : ''}${filename}`
+        logger.info(`Using direct web video URL: ${videoPath}`)
       }
     } else {
-      logger.info('No VideoFiles to check for URLs')
+      logger.warn('No Spaces CDN URLs configured - please configure plugin settings')
     }
 
-    // Check VideoStreamingPlaylists from Sequelize model
-    if (!videoPath && fullVideo.VideoStreamingPlaylists && fullVideo.VideoStreamingPlaylists.length > 0) {
+    // Skip all the complex Sequelize extraction - we already have our URL
+    if (false && !videoPath && fullVideo.VideoStreamingPlaylists && fullVideo.VideoStreamingPlaylists.length > 0) {
       logger.info(`Checking ${fullVideo.VideoStreamingPlaylists.length} VideoStreamingPlaylists`)
       for (const playlist of fullVideo.VideoStreamingPlaylists) {
         const playlistData = playlist.dataValues || playlist
@@ -616,12 +626,13 @@ async function extractVideoSnapshots(video) {
     }
 
     if (!videoPath) {
-      logger.warn(`No video file found (local or remote) for ${fullVideo.uuid}, skipping snapshot extraction`)
-      logger.info(`Full video object keys available: ${Object.keys(fullVideo).join(', ')}`)
+      logger.error(`Failed to construct video URL for ${fullVideo.uuid} - check plugin settings`)
       return // Skip snapshot extraction but continue processing
     }
+
+    logger.info(`Video URL ready for processing: ${videoPath ? 'Yes' : 'No'}`)
   } catch (error) {
-    logger.error('Error while searching for video file:', error)
+    logger.error('Error while constructing video URL:', error)
     return // Skip snapshot extraction but continue processing
   }
 

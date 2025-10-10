@@ -103,7 +103,7 @@ async function getSignedVideoUrl(videoUuid, baseUrl, isStreamingPlaylist = true)
     const signedUrl = await generateSignedUrl(baseUrl, objectKey)
 
     if (signedUrl) {
-      logger.info(`Got signed URL for video ${videoUuid}`)
+      logger.info(`Got signed URL for video ${videoUuid}: ${signedUrl}`)
       return signedUrl
     }
 
