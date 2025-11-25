@@ -241,6 +241,38 @@ async function extractVideoSnapshots(video) {
     let playlistUrl = null
     let fileUuid = null
 
+    // DEBUG: Log what data we have access to
+    logger.info(`=== DEBUG: Video URL Resolution for ${fullVideo.uuid} ===`)
+    logger.info(`Video ID: ${fullVideo.id}`)
+    logger.info(`peertubeHelpers.database available: ${!!peertubeHelpers.database?.query}`)
+
+    // Test getFiles() return structure
+    try {
+      const filesData = await peertubeHelpers.videos.getFiles(fullVideo.id)
+      logger.info(`getFiles() raw result type: ${typeof filesData}`)
+      logger.info(`getFiles() raw result: ${JSON.stringify(filesData, null, 2)}`)
+    } catch (e) {
+      logger.info(`getFiles() error: ${e.message}`)
+    }
+
+    // Test database query
+    if (peertubeHelpers.database?.query) {
+      try {
+        const testQuery = `
+          SELECT vf."fileUrl", vf."filename", vf."resolution"
+          FROM "videoFile" vf
+          INNER JOIN "videoStreamingPlaylist" vsp ON vf."videoStreamingPlaylistId" = vsp."id"
+          WHERE vsp."videoId" = $1
+          ORDER BY vf."resolution" DESC
+        `
+        const testResults = await peertubeHelpers.database.query(testQuery, [fullVideo.id])
+        logger.info(`Database query results: ${JSON.stringify(testResults, null, 2)}`)
+      } catch (e) {
+        logger.info(`Database query error: ${e.message}`)
+      }
+    }
+    logger.info(`=== END DEBUG ===`)
+
     // Check StreamingPlaylists for the actual file UUID
     if (fullVideo.VideoStreamingPlaylists && fullVideo.VideoStreamingPlaylists.length > 0) {
       const playlist = fullVideo.VideoStreamingPlaylists[0]

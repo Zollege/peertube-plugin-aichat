@@ -2,3 +2,4 @@ node_modules
 .cache
 dist
 peertube-plugin-livechat
+.DS_Store
