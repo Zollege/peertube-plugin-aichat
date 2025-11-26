@@ -89,11 +89,9 @@ async function processVideo(video) {
     // Process snapshots
     await extractVideoSnapshots(video)
 
-    // Process transcript
-    await processVideoTranscript(video)
-
-    // Generate embeddings
-    await generateVideoEmbeddings(video)
+    // Process transcript with retry logic
+    // This will schedule retries if transcript isn't available yet (auto-generation in progress)
+    await checkAndProcessTranscript(video)
 
     // Update status to completed
     await databaseService.updateProcessingStatus(video.uuid, 'completed')
@@ -799,13 +797,39 @@ async function generateVideoEmbeddings(video) {
   logger.info(`Generated embeddings for video ${video.uuid}`)
 }
 
-async function checkAndProcessTranscript(video) {
+async function checkAndProcessTranscript(video, retryCount = 0) {
+  const MAX_TRANSCRIPT_RETRIES = 5
+  const TRANSCRIPT_RETRY_DELAY = 60000 // 60 seconds
+
   // Check if transcript is now available and process if needed
   const embeddings = await databaseService.getVideoEmbeddings(video.uuid)
 
   if (!embeddings || embeddings.length === 0) {
+    logger.info(`Checking for transcript for video ${video.uuid} (attempt ${retryCount + 1}/${MAX_TRANSCRIPT_RETRIES + 1})`)
+
     await processVideoTranscript(video)
     await generateVideoEmbeddings(video)
+
+    // Check if we actually got any embeddings
+    const newEmbeddings = await databaseService.getVideoEmbeddings(video.uuid)
+
+    if ((!newEmbeddings || newEmbeddings.length === 0) && retryCount < MAX_TRANSCRIPT_RETRIES) {
+      // No transcript found yet - schedule a retry
+      // This handles the case where auto-generated captions aren't ready yet
+      logger.info(`No transcript found for video ${video.uuid}, scheduling retry in ${TRANSCRIPT_RETRY_DELAY / 1000}s`)
+
+      setTimeout(() => {
+        checkAndProcessTranscript(video, retryCount + 1).catch(err => {
+          logger.error(`Error in transcript retry for ${video.uuid}:`, err)
+        })
+      }, TRANSCRIPT_RETRY_DELAY)
+    } else if (newEmbeddings && newEmbeddings.length > 0) {
+      logger.info(`Successfully processed ${newEmbeddings.length} transcript chunks for video ${video.uuid}`)
+    } else {
+      logger.info(`No transcript available for video ${video.uuid} after ${retryCount + 1} attempts`)
+    }
+  } else {
+    logger.debug(`Video ${video.uuid} already has ${embeddings.length} transcript embeddings`)
   }
 }
 
