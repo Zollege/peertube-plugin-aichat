@@ -99,7 +99,21 @@ async function getRelatedVideos(currentVideoUuid, limit = 10) {
         LIMIT $2
       `, { bind: [currentVideoUuid, limit] })
 
-      return result || []
+      // Debug: Log the result structure
+      logger.info(`getRelatedVideos raw result type: ${typeof result}`)
+      logger.info(`getRelatedVideos raw result: ${JSON.stringify(result)?.slice(0, 500)}`)
+
+      // Handle different result formats from PeerTube's query helper
+      let videos = []
+      if (Array.isArray(result)) {
+        // Result might be [rows, metadata] from Sequelize
+        videos = Array.isArray(result[0]) ? result[0] : result
+      } else if (result?.rows) {
+        videos = result.rows
+      }
+
+      logger.info(`getRelatedVideos returning ${videos.length} videos`)
+      return videos
     }
     return []
   } catch (error) {

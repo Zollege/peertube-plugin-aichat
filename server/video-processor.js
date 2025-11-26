@@ -463,9 +463,80 @@ async function getVideoTranscript(video) {
       logger.warn(`getCaptions failed: ${e.message}`)
     }
 
+    // Try loadByIdOrUUIDWithFiles which might include caption associations
+    let videoModel = null
+    try {
+      if (!captionUrl && peertubeHelpers.videos.loadByIdOrUUIDWithFiles) {
+        logger.info(`Trying loadByIdOrUUIDWithFiles...`)
+        videoModel = await peertubeHelpers.videos.loadByIdOrUUIDWithFiles(video.uuid)
+        if (videoModel) {
+          logger.info(`loadByIdOrUUIDWithFiles returned model with keys: ${Object.keys(videoModel).join(', ')}`)
+
+          // Check for VideoCaptions association
+          if (videoModel.VideoCaptions && videoModel.VideoCaptions.length > 0) {
+            logger.info(`Found ${videoModel.VideoCaptions.length} caption(s) via loadByIdOrUUIDWithFiles`)
+            for (const caption of videoModel.VideoCaptions) {
+              const captionData = caption.dataValues || caption
+              logger.info(`Caption data from WithFiles: ${JSON.stringify(captionData)}`)
+
+              if (captionData.fileUrl) {
+                captionUrl = captionData.fileUrl
+                logger.info(`Got caption URL via loadByIdOrUUIDWithFiles: ${captionUrl}`)
+                break
+              }
+            }
+          } else {
+            logger.info(`loadByIdOrUUIDWithFiles did not include VideoCaptions`)
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`loadByIdOrUUIDWithFiles failed: ${e.message}`)
+    }
+
+    // Try to query captions via database directly
+    if (!captionUrl && peertubeHelpers.database?.query) {
+      try {
+        logger.info(`Trying direct database query for captions...`)
+        const result = await peertubeHelpers.database.query(`
+          SELECT vc."language", vc."filename", vc."fileUrl"
+          FROM "videoCaption" vc
+          JOIN video v ON vc."videoId" = v.id
+          WHERE v.uuid = $1
+        `, { bind: [video.uuid] })
+
+        logger.info(`Caption database query result: ${JSON.stringify(result)}`)
+
+        // Handle different result formats
+        let captions = []
+        if (Array.isArray(result)) {
+          captions = Array.isArray(result[0]) ? result[0] : result
+        } else if (result?.rows) {
+          captions = result.rows
+        }
+
+        if (captions.length > 0) {
+          // Prefer English
+          const caption = captions.find(c => c.language === 'en') || captions[0]
+          if (caption.fileUrl) {
+            captionUrl = caption.fileUrl
+            logger.info(`Got caption URL from database: ${captionUrl}`)
+          } else if (caption.filename) {
+            logger.info(`Caption has filename but no URL: ${caption.filename}`)
+          }
+        } else {
+          logger.info(`No captions found in database for video ${video.uuid}`)
+        }
+      } catch (e) {
+        logger.warn(`Database caption query failed: ${e.message}`)
+      }
+    }
+
     // Try to load full video details which might include caption information
     try {
-      const videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+      if (!videoModel) {
+        videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+      }
 
       // Extract data from Sequelize model if needed
       const fullVideo = videoModel.dataValues || videoModel
