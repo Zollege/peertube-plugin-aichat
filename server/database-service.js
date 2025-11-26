@@ -1,14 +1,22 @@
 const { Client } = require('pg')
 const pgvector = require('pgvector/pg')
 
-let logger = null
+let rawLogger = null
 let settingsManager = null
 let storageManager = null
 let dbClient = null
 let isConnected = false
 
+// Wrapper logger that adds 'aichat' tag to all messages
+const logger = {
+  info: (msg, meta) => rawLogger?.info(msg, { tags: ['aichat'], ...meta }),
+  warn: (msg, meta) => rawLogger?.warn(msg, { tags: ['aichat'], ...meta }),
+  error: (msg, meta) => rawLogger?.error(msg, { tags: ['aichat'], ...meta }),
+  debug: (msg, meta) => rawLogger?.debug(msg, { tags: ['aichat'], ...meta })
+}
+
 async function initialize(services) {
-  logger = services.logger
+  rawLogger = services.logger
   settingsManager = services.settingsManager
   storageManager = services.storageManager
 

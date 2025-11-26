@@ -4,12 +4,20 @@ const path = require('path')
 const openaiService = require('./openai-service')
 const databaseService = require('./database-service')
 
-let logger = null
+let rawLogger = null
 let settingsManager = null
 let peertubeHelpers = null
 
+// Wrapper logger that adds 'aichat' tag to all messages
+const logger = {
+  info: (msg, meta) => rawLogger?.info(msg, { tags: ['aichat'], ...meta }),
+  warn: (msg, meta) => rawLogger?.warn(msg, { tags: ['aichat'], ...meta }),
+  error: (msg, meta) => rawLogger?.error(msg, { tags: ['aichat'], ...meta }),
+  debug: (msg, meta) => rawLogger?.debug(msg, { tags: ['aichat'], ...meta })
+}
+
 function initialize(services) {
-  logger = services.logger
+  rawLogger = services.logger
   settingsManager = services.settingsManager
   peertubeHelpers = services.peertubeHelpers
 
@@ -121,140 +129,16 @@ async function extractVideoSnapshots(video) {
 
   logger.info(`Using snapshot interval of ${interval} seconds for video ${video.uuid}`)
 
-  // IMPORTANT: First, try to load the complete video object
-  // The video object passed to hooks might be minimal
+  // Load video metadata (duration, etc.)
   let fullVideo = video
-
-  // Log video privacy level for debugging, but we'll handle all videos the same way
-  if (video.privacy) {
-    logger.info(`Video privacy level: ${video.privacy}`)
-  }
   try {
-    logger.info(`Loading full video details for ${video.uuid}`)
-
-    // Try different loading methods to get the full video with files
-    let videoModel = null
-
-    // Method 1: Try loadByIdOrUUID
-    videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid || video.id)
-
+    const videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid || video.id)
     if (videoModel) {
-      logger.info(`Loaded video model with keys: ${Object.keys(videoModel).join(', ')}`)
-
-      // Extract the actual video data from the Sequelize model
-      if (videoModel.dataValues) {
-        fullVideo = videoModel.dataValues
-        logger.info(`Video data keys: ${Object.keys(fullVideo).join(', ')}`)
-      }
-
-      // Check for VideoFiles (Sequelize association)
-      if (videoModel.VideoFiles) {
-        logger.info(`VideoFiles exists with ${videoModel.VideoFiles.length} files`)
-        if (videoModel.VideoFiles.length > 0) {
-          const firstFile = videoModel.VideoFiles[0]
-          if (firstFile.dataValues) {
-            logger.info(`First VideoFile data: ${JSON.stringify(firstFile.dataValues)}`)
-          } else {
-            logger.info(`First VideoFile keys: ${Object.keys(firstFile).join(', ')}`)
-          }
-        }
-        // Add VideoFiles to fullVideo for easier access
-        fullVideo.VideoFiles = videoModel.VideoFiles
-      } else {
-        logger.info('VideoFiles not loaded with model, will try to fetch separately')
-      }
-
-      // Check for VideoStreamingPlaylists (Sequelize association)
-      if (videoModel.VideoStreamingPlaylists) {
-        logger.info(`VideoStreamingPlaylists exists with ${videoModel.VideoStreamingPlaylists.length} playlists`)
-        if (videoModel.VideoStreamingPlaylists.length > 0) {
-          const firstPlaylist = videoModel.VideoStreamingPlaylists[0]
-          if (firstPlaylist.dataValues) {
-            logger.info(`First playlist data: ${JSON.stringify(firstPlaylist.dataValues)}`)
-          }
-          // Check if playlist has VideoFiles
-          if (firstPlaylist.VideoFiles) {
-            logger.info(`Playlist has ${firstPlaylist.VideoFiles.length} VideoFiles`)
-            if (firstPlaylist.VideoFiles.length > 0) {
-              const firstFile = firstPlaylist.VideoFiles[0]
-              if (firstFile.dataValues) {
-                logger.info(`First playlist file data: ${JSON.stringify(firstFile.dataValues)}`)
-              }
-            }
-          }
-        }
-        // Add to fullVideo for easier access
-        fullVideo.VideoStreamingPlaylists = videoModel.VideoStreamingPlaylists
-      } else {
-        logger.info('VideoStreamingPlaylists not loaded with model')
-      }
-
-      // If no files were loaded, try to get them through the API
-      if ((!videoModel.VideoFiles || videoModel.VideoFiles.length === 0) &&
-          (!videoModel.VideoStreamingPlaylists || videoModel.VideoStreamingPlaylists.length === 0)) {
-        logger.info('No files loaded with model, attempting to fetch video with full details')
-
-        // Try to get video details through other means
-        try {
-          // Method 2: Try to get video by UUID with a fresh load
-          const videoId = fullVideo.id || video.id
-          if (videoId) {
-            logger.info(`Attempting to reload video by ID: ${videoId}`)
-            const reloadedVideo = await peertubeHelpers.videos.loadByIdOrUUID(videoId)
-            if (reloadedVideo) {
-              logger.info(`Reloaded video has files: VideoFiles=${!!reloadedVideo.VideoFiles}, StreamingPlaylists=${!!reloadedVideo.VideoStreamingPlaylists}`)
-
-              // CRITICAL: Actually assign the files to fullVideo so they can be checked later
-              if (reloadedVideo.VideoFiles) {
-                fullVideo.VideoFiles = reloadedVideo.VideoFiles
-                videoModel.VideoFiles = reloadedVideo.VideoFiles
-                logger.info(`Assigned ${reloadedVideo.VideoFiles.length} VideoFiles to fullVideo`)
-
-                // Log the actual file data
-                if (reloadedVideo.VideoFiles.length > 0) {
-                  const firstFile = reloadedVideo.VideoFiles[0]
-                  const fileData = firstFile.dataValues || firstFile
-                  logger.info(`First VideoFile data: ${JSON.stringify(fileData)}`)
-                }
-              }
-
-              if (reloadedVideo.VideoStreamingPlaylists) {
-                fullVideo.VideoStreamingPlaylists = reloadedVideo.VideoStreamingPlaylists
-                videoModel.VideoStreamingPlaylists = reloadedVideo.VideoStreamingPlaylists
-                logger.info(`Assigned ${reloadedVideo.VideoStreamingPlaylists.length} StreamingPlaylists to fullVideo`)
-
-                // Log the actual playlist data
-                if (reloadedVideo.VideoStreamingPlaylists.length > 0) {
-                  const firstPlaylist = reloadedVideo.VideoStreamingPlaylists[0]
-                  const playlistData = firstPlaylist.dataValues || firstPlaylist
-                  logger.info(`First Playlist data: ${JSON.stringify(playlistData)}`)
-
-                  // Check for nested VideoFiles in playlists
-                  if (firstPlaylist.VideoFiles && firstPlaylist.VideoFiles.length > 0) {
-                    logger.info(`Playlist has ${firstPlaylist.VideoFiles.length} nested VideoFiles`)
-                    const firstNestedFile = firstPlaylist.VideoFiles[0]
-                    const nestedFileData = firstNestedFile.dataValues || firstNestedFile
-                    logger.info(`First nested VideoFile data: ${JSON.stringify(nestedFileData)}`)
-                  }
-                }
-              }
-
-              // Log what we have after assignment
-              logger.info(`After reload - fullVideo.VideoFiles: ${fullVideo.VideoFiles ? fullVideo.VideoFiles.length : 0} files`)
-              logger.info(`After reload - fullVideo.VideoStreamingPlaylists: ${fullVideo.VideoStreamingPlaylists ? fullVideo.VideoStreamingPlaylists.length : 0} playlists`)
-            }
-          }
-        } catch (e) {
-          logger.debug('Could not reload video:', e.message)
-        }
-      }
-    } else {
-      logger.warn(`Could not load full video details, using original video object`)
-      fullVideo = video
+      fullVideo = videoModel.dataValues || videoModel
+      logger.debug(`Loaded video metadata for ${video.uuid}`)
     }
   } catch (error) {
-    logger.error(`Error loading full video:`, error)
-    fullVideo = video
+    logger.debug(`Could not load full video metadata: ${error.message}`)
   }
 
   const dataPath = peertubeHelpers.plugin.getDataDirectoryPath()
@@ -433,77 +317,18 @@ async function processVideoTranscript(video) {
 
 async function getVideoTranscript(video) {
   try {
-    // DEBUG: Log available peertubeHelpers.videos methods
-    logger.info(`=== CAPTION DEBUG START for video ${video.uuid} ===`)
-    logger.info(`Available peertubeHelpers.videos methods: ${Object.keys(peertubeHelpers.videos || {}).join(', ')}`)
-
-    // First, try to get captions through PeerTube's API
     let captionUrl = null
     let captionContent = null
 
-    // Try getCaptions helper if it exists (similar to getFiles)
-    try {
-      if (peertubeHelpers.videos.getCaptions) {
-        logger.info(`getCaptions method exists! Trying it...`)
-        const captionsData = await peertubeHelpers.videos.getCaptions(video.id)
-        logger.info(`getCaptions result: ${JSON.stringify(captionsData)}`)
-        if (captionsData?.length > 0) {
-          const caption = captionsData.find(c => c.language === 'en') || captionsData[0]
-          if (caption.url || caption.fileUrl) {
-            captionUrl = caption.url || caption.fileUrl
-            logger.info(`Got caption URL via getCaptions: ${captionUrl}`)
-          }
-        }
-      } else {
-        logger.info(`getCaptions method does NOT exist on peertubeHelpers.videos`)
-      }
-    } catch (e) {
-      logger.warn(`getCaptions failed: ${e.message}`)
-    }
-
-    // Try loadByIdOrUUIDWithFiles which might include caption associations
-    let videoModel = null
-    try {
-      if (!captionUrl && peertubeHelpers.videos.loadByIdOrUUIDWithFiles) {
-        logger.info(`Trying loadByIdOrUUIDWithFiles...`)
-        videoModel = await peertubeHelpers.videos.loadByIdOrUUIDWithFiles(video.uuid)
-        if (videoModel) {
-          logger.info(`loadByIdOrUUIDWithFiles returned model with keys: ${Object.keys(videoModel).join(', ')}`)
-
-          // Check for VideoCaptions association
-          if (videoModel.VideoCaptions && videoModel.VideoCaptions.length > 0) {
-            logger.info(`Found ${videoModel.VideoCaptions.length} caption(s) via loadByIdOrUUIDWithFiles`)
-            for (const caption of videoModel.VideoCaptions) {
-              const captionData = caption.dataValues || caption
-              logger.info(`Caption data from WithFiles: ${JSON.stringify(captionData)}`)
-
-              if (captionData.fileUrl) {
-                captionUrl = captionData.fileUrl
-                logger.info(`Got caption URL via loadByIdOrUUIDWithFiles: ${captionUrl}`)
-                break
-              }
-            }
-          } else {
-            logger.info(`loadByIdOrUUIDWithFiles did not include VideoCaptions`)
-          }
-        }
-      }
-    } catch (e) {
-      logger.warn(`loadByIdOrUUIDWithFiles failed: ${e.message}`)
-    }
-
-    // Try to query captions via database directly
-    if (!captionUrl && peertubeHelpers.database?.query) {
+    // Query captions directly from PeerTube's database (most reliable method)
+    if (peertubeHelpers.database?.query) {
       try {
-        logger.info(`Trying direct database query for captions...`)
         const result = await peertubeHelpers.database.query(`
           SELECT vc."language", vc."filename", vc."fileUrl"
           FROM "videoCaption" vc
           JOIN video v ON vc."videoId" = v.id
           WHERE v.uuid = $1
         `, { bind: [video.uuid] })
-
-        logger.info(`Caption database query result: ${JSON.stringify(result)}`)
 
         // Handle different result formats
         let captions = []
@@ -518,112 +343,13 @@ async function getVideoTranscript(video) {
           const caption = captions.find(c => c.language === 'en') || captions[0]
           if (caption.fileUrl) {
             captionUrl = caption.fileUrl
-            logger.info(`Got caption URL from database: ${captionUrl}`)
-          } else if (caption.filename) {
-            logger.info(`Caption has filename but no URL: ${caption.filename}`)
+            logger.info(`Found caption for video ${video.uuid}: ${caption.language}`)
           }
-        } else {
-          logger.info(`No captions found in database for video ${video.uuid}`)
         }
       } catch (e) {
-        logger.warn(`Database caption query failed: ${e.message}`)
+        logger.debug(`Caption database query failed: ${e.message}`)
       }
     }
-
-    // Try to load full video details which might include caption information
-    try {
-      if (!videoModel) {
-        videoModel = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
-      }
-
-      // Extract data from Sequelize model if needed
-      const fullVideo = videoModel.dataValues || videoModel
-
-      // Log the model structure for debugging
-      logger.info(`Video model keys for captions: ${Object.keys(videoModel).join(', ')}`)
-      if (fullVideo !== videoModel) {
-        logger.info(`Video dataValues keys: ${Object.keys(fullVideo).join(', ')}`)
-      }
-
-      // Check if video has captions property
-      if (fullVideo.captions || fullVideo.videoCaptions) {
-        const captions = fullVideo.captions || fullVideo.videoCaptions
-        logger.info(`Found ${captions.length} caption(s) for video ${video.uuid}`)
-
-        // Prefer English, but take any available caption
-        const caption = captions.find(c => c.language?.id === 'en' || c.language?.code === 'en') ||
-                       captions[0]
-
-        if (caption) {
-          captionUrl = caption.captionPath || caption.fileUrl || caption.url
-          logger.info(`Found caption URL: ${captionUrl}`)
-        }
-      }
-
-      // Check for VideoCaptions association (Sequelize)
-      if (!captionUrl && videoModel.VideoCaptions) {
-        logger.info(`Found VideoCaptions association with ${videoModel.VideoCaptions.length} captions`)
-        for (const caption of videoModel.VideoCaptions) {
-          const captionData = caption.dataValues || caption
-          logger.info(`Caption object keys: ${Object.keys(caption).join(', ')}`)
-          logger.info(`Caption data keys: ${Object.keys(captionData).join(', ')}`)
-          logger.info(`Caption FULL data: ${JSON.stringify(captionData)}`)
-
-          // Check if caption has any methods that might return URL
-          if (typeof caption.getFileUrl === 'function') {
-            logger.info(`caption.getFileUrl() exists!`)
-            try {
-              const url = await caption.getFileUrl()
-              logger.info(`caption.getFileUrl() returned: ${url}`)
-            } catch (e) {
-              logger.warn(`getFileUrl() failed: ${e.message}`)
-            }
-          }
-
-          // Try to find the caption URL from various properties
-          const possibleUrl = captionData.fileUrl || captionData.captionPath || captionData.url || captionData.filename
-          logger.info(`Possible URL properties - fileUrl: ${captionData.fileUrl}, captionPath: ${captionData.captionPath}, url: ${captionData.url}, filename: ${captionData.filename}`)
-
-          if (captionData.fileUrl || captionData.captionPath) {
-            captionUrl = captionData.fileUrl || captionData.captionPath
-            logger.info(`Found caption URL from VideoCaptions: ${captionUrl}`)
-            break
-          }
-        }
-      } else if (!captionUrl) {
-        logger.info(`No VideoCaptions association found on videoModel`)
-      }
-
-      // Also check trackerUrls, which might contain caption info
-      if (!captionUrl && fullVideo.trackerUrls) {
-        logger.debug(`Video has tracker URLs: ${fullVideo.trackerUrls.length}`)
-      }
-
-      // Log available properties for debugging
-      if (!captionUrl) {
-        logger.debug(`Full video object keys: ${Object.keys(fullVideo).join(', ')}`)
-      }
-    } catch (error) {
-      logger.debug('Could not load video captions via API:', error.message)
-    }
-
-    // Alternative: Try to get captions through PeerTube helpers
-    if (!captionUrl) {
-      try {
-        // Try using the PeerTube database if accessible
-        // This is a workaround to check if captions exist
-        if (video.id) {
-          logger.debug(`Checking for captions for video ID: ${video.id}`)
-          // Note: Direct database access might not be available in plugins
-          // Captions would need to be accessed through the loaded video object
-        }
-      } catch (error) {
-        logger.debug('Could not check for captions:', error.message)
-      }
-    }
-
-    // Caption URL will be found via PeerTube API (getCaptions or VideoCaptions association)
-    // No manual URL construction needed - PeerTube provides the correct URLs
 
     // If we have a remote caption URL, fetch it
     if (captionUrl && (captionUrl.startsWith('http://') || captionUrl.startsWith('https://'))) {
@@ -648,7 +374,7 @@ async function getVideoTranscript(video) {
         })
 
         if (captionContent) {
-          logger.info(`Downloaded caption from remote URL: ${captionUrl}`)
+          logger.info(`Downloaded caption for video ${video.uuid}`)
           return captionContent
         }
       } catch (error) {
@@ -696,7 +422,7 @@ async function getVideoTranscript(video) {
       }
     }
 
-    logger.info(`No caption files found (local or remote) for video ${video.uuid}`)
+    logger.debug(`No caption found for video ${video.uuid}`)
   } catch (error) {
     logger.error('Error getting video transcript:', error)
   }
