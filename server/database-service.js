@@ -208,7 +208,7 @@ async function getVideoEmbeddings(videoUuid) {
       startTime: row.start_time,
       endTime: row.end_time,
       content: row.content,
-      embedding: pgvector.fromSql(row.embedding)
+      embedding: row.embedding  // pgvector type is automatically parsed after registerType()
     }))
   } catch (error) {
     logger.error('Error getting embeddings:', error)
