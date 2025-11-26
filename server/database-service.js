@@ -170,6 +170,9 @@ async function saveVideoEmbedding(videoUuid, videoId, chunkIndex, data) {
   try {
     const { startTime, endTime, content, embedding } = data
 
+    // Handle null embeddings - pgvector.toSql expects an array
+    const embeddingValue = embedding ? pgvector.toSql(embedding) : null
+
     await dbClient.query(`
       INSERT INTO plugin_ai_video_embeddings
         (video_id, video_uuid, chunk_index, start_time, end_time, content, embedding)
@@ -180,7 +183,7 @@ async function saveVideoEmbedding(videoUuid, videoId, chunkIndex, data) {
         end_time = EXCLUDED.end_time,
         content = EXCLUDED.content,
         embedding = EXCLUDED.embedding
-    `, [videoId, videoUuid, chunkIndex, startTime, endTime, content, pgvector.toSql(embedding)])
+    `, [videoId, videoUuid, chunkIndex, startTime, endTime, content, embeddingValue])
   } catch (error) {
     logger.error('Error saving embedding:', error)
     throw error
