@@ -71,17 +71,28 @@ async function analyzeImage(base64Image, prompt) {
   return response.choices[0].message.content
 }
 
-async function generateChatResponse(systemPrompt, userMessage, context, model, maxTokens) {
+async function generateChatResponse(systemPrompt, userMessage, context, model, maxTokens, history = []) {
   if (!openaiClient) {
     throw new Error('OpenAI client not initialized')
   }
 
+  // Build messages array with system prompt first
+  const messages = [
+    { role: 'system', content: systemPrompt }
+  ]
+
+  // Add conversation history (already in chronological order from caller)
+  for (const entry of history) {
+    messages.push({ role: 'user', content: entry.message })
+    messages.push({ role: 'assistant', content: entry.response })
+  }
+
+  // Add current user message
+  messages.push({ role: 'user', content: userMessage })
+
   const completion = await openaiClient.chat.completions.create({
     model: model || 'gpt-4',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMessage }
-    ],
+    messages: messages,
     max_tokens: maxTokens || 1000,
     temperature: 0.7
   })

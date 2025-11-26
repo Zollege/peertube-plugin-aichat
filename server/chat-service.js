@@ -16,11 +16,41 @@ async function handleChatMessage(videoId, videoUuid, message, userId) {
     throw new Error('AI service not configured')
   }
 
+  // Get current video metadata
+  let videoMetadata = null
+  try {
+    const videoData = await peertubeHelpers.videos.loadByIdOrUUID(videoUuid)
+    if (videoData) {
+      videoMetadata = {
+        title: videoData.name || 'Unknown',
+        description: videoData.description || '',
+        channel: videoData.VideoChannel?.name || '',
+        duration: videoData.duration || 0
+      }
+    }
+  } catch (error) {
+    logger.warn('Failed to load video metadata:', error.message)
+  }
+
   // Get relevant context from vector database
   const context = await getVideoContext(videoUuid, message)
 
-  // Generate response
-  const response = await generateChatResponse(message, context, videoId, videoUuid, userId)
+  // Add video metadata to context
+  if (context) {
+    context.metadata = videoMetadata
+  }
+
+  // Get related videos for recommendations
+  const relatedVideos = await getRelatedVideos(videoUuid, 10)
+  if (context) {
+    context.relatedVideos = relatedVideos
+  }
+
+  // Get conversation history for this specific video (last 20 exchanges)
+  const history = await getChatHistory(videoId, userId)
+
+  // Generate response with history
+  const response = await generateChatResponse(message, context, videoId, videoUuid, userId, history)
 
   return response
 }
@@ -54,7 +84,31 @@ async function getVideoContext(videoUuid, query) {
   }
 }
 
-async function generateChatResponse(message, context, videoId, videoUuid, userId) {
+async function getRelatedVideos(currentVideoUuid, limit = 10) {
+  try {
+    // Use PeerTube's database helper to query other public videos
+    if (peertubeHelpers.database?.query) {
+      const result = await peertubeHelpers.database.query(`
+        SELECT v.uuid, v.name, v.description, vc.name as channel_name
+        FROM video v
+        JOIN "videoChannel" vc ON v."channelId" = vc.id
+        WHERE v.uuid != $1
+          AND v.state = 1
+          AND v.privacy = 1
+        ORDER BY v."publishedAt" DESC
+        LIMIT $2
+      `, { bind: [currentVideoUuid, limit] })
+
+      return result || []
+    }
+    return []
+  } catch (error) {
+    logger.warn('Failed to get related videos:', error.message)
+    return []
+  }
+}
+
+async function generateChatResponse(message, context, videoId, videoUuid, userId, history = []) {
   const systemPrompt = await settingsManager.getSetting('system-prompt')
   const model = await settingsManager.getSetting('openai-model')
   const maxTokens = parseInt(await settingsManager.getSetting('max-tokens') || '1000')
@@ -62,37 +116,67 @@ async function generateChatResponse(message, context, videoId, videoUuid, userId
   // Build context message
   let contextMessage = ''
 
-  if (context) {
-    if (context.transcriptChunks && context.transcriptChunks.length > 0) {
-      contextMessage += '\n\nRelevant transcript sections:\n'
-      context.transcriptChunks.forEach(chunk => {
-        const startTime = formatTime(chunk.startTime || chunk.start_time)
-        const endTime = formatTime(chunk.endTime || chunk.end_time)
-        contextMessage += `[${startTime} - ${endTime}]: ${chunk.content}\n`
-      })
+  // Always include current video metadata first
+  if (context?.metadata) {
+    contextMessage += 'CURRENT VIDEO:\n'
+    contextMessage += `Title: ${context.metadata.title}\n`
+    if (context.metadata.channel) {
+      contextMessage += `Channel: ${context.metadata.channel}\n`
     }
+    contextMessage += `Duration: ${formatTime(context.metadata.duration)}\n`
+    if (context.metadata.description) {
+      contextMessage += `Description: ${context.metadata.description.slice(0, 500)}\n`
+    }
+    contextMessage += '\n'
+  }
 
-    if (context.snapshots && context.snapshots.length > 0) {
-      contextMessage += '\n\nVideo visual descriptions:\n'
-      context.snapshots.forEach(snapshot => {
-        const time = formatTime(snapshot.timestamp)
-        contextMessage += `[${time}]: ${snapshot.description || 'Visual at this timestamp'}\n`
-      })
-    }
+  // Add transcript chunks if available
+  if (context?.transcriptChunks?.length > 0) {
+    contextMessage += 'Relevant transcript sections:\n'
+    context.transcriptChunks.forEach(chunk => {
+      const startTime = formatTime(chunk.startTime || chunk.start_time)
+      const endTime = formatTime(chunk.endTime || chunk.end_time)
+      contextMessage += `[${startTime} - ${endTime}]: ${chunk.content}\n`
+    })
+    contextMessage += '\n'
+  }
+
+  // Add visual descriptions if available
+  if (context?.snapshots?.length > 0) {
+    contextMessage += 'Video visual descriptions:\n'
+    context.snapshots.forEach(snapshot => {
+      const time = formatTime(snapshot.timestamp)
+      contextMessage += `[${time}]: ${snapshot.description || 'Visual at this timestamp'}\n`
+    })
+    contextMessage += '\n'
+  }
+
+  // Add related videos for recommendations
+  if (context?.relatedVideos?.length > 0) {
+    contextMessage += 'OTHER AVAILABLE VIDEOS (for recommendations):\n'
+    context.relatedVideos.forEach(video => {
+      const desc = video.description ? `: ${video.description.slice(0, 100)}...` : ''
+      contextMessage += `- "${video.name}" by ${video.channel_name || 'Unknown'}${desc}\n`
+    })
+    contextMessage += '\n'
   }
 
   // Build the full user message
   const fullUserMessage = contextMessage
-    ? `Context about the video:${contextMessage}\n\nUser question: ${message}`
+    ? `Context:\n${contextMessage}\nUser question: ${message}`
     : `User question: ${message}`
 
-  // Generate response using OpenAI
+  // Prepare history (last 20 exchanges, in chronological order)
+  const recentHistory = history.slice(-20).reverse()
+
+  // Generate response using OpenAI with conversation history
   const aiResponse = await openaiService.generateChatResponse(
     systemPrompt,
     fullUserMessage,
     context,
     model,
-    maxTokens
+    maxTokens,
+    recentHistory
   )
 
   const responseContent = aiResponse.content

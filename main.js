@@ -155,45 +155,28 @@ async function registerSettings(registerSetting) {
     type: 'input-textarea',
     descriptionHTML: 'Custom system prompt for the AI',
     private: false,
-    default: `You are a helpful AI assistant for PeerTube videos. You have access to the video's transcript,
-snapshots, and metadata. When answering questions, reference specific timestamps when relevant.
-Be concise but informative. If you mention a specific moment, include the timestamp in format [0:00].`
+    default: `You are an AI assistant helping users understand and discuss videos on this platform.
+
+You have access to:
+1. The CURRENT VIDEO's title, description, channel, duration, and transcript
+2. Visual descriptions from video snapshots at various timestamps
+3. A list of OTHER AVAILABLE VIDEOS you can recommend
+
+Guidelines:
+- When users ask about "this video" or "the video", refer to the CURRENT VIDEO information
+- Reference specific timestamps [MM:SS] when discussing video content from the transcript
+- When asked for recommendations or related content, suggest videos from the OTHER AVAILABLE VIDEOS list
+- Remember the conversation history to provide coherent follow-up responses
+- Be concise but informative
+- If you don't have enough information to answer, say so honestly`
   })
 
-  // Object Storage CDN URLs
-  registerSetting({
-    name: 'spaces-streaming-url',
-    label: 'Spaces/S3 Streaming CDN URL',
-    type: 'input',
-    descriptionHTML: 'Base URL for streaming videos on object storage (e.g., https://peertube-streaming-1.nyc3.cdn.digitaloceanspaces.com)',
-    private: false,
-    default: ''
-  })
-
-  registerSetting({
-    name: 'spaces-videos-url',
-    label: 'Spaces/S3 Videos CDN URL',
-    type: 'input',
-    descriptionHTML: 'Base URL for regular videos on object storage (e.g., https://peertube-videos-1.nyc3.cdn.digitaloceanspaces.com)',
-    private: false,
-    default: ''
-  })
-
-  registerSetting({
-    name: 'spaces-captions-url',
-    label: 'Spaces/S3 Captions CDN URL',
-    type: 'input',
-    descriptionHTML: 'Base URL for captions on object storage (e.g., https://peertube-captions.nyc3.cdn.digitaloceanspaces.com)',
-    private: false,
-    default: ''
-  })
-
-  // S3/Spaces Access Credentials (for private videos)
+  // S3/Spaces Access Credentials (for private videos if needed)
   registerSetting({
     name: 'spaces-access-key',
     label: 'Spaces/S3 Access Key ID',
     type: 'input-password',
-    descriptionHTML: 'Access Key ID for DigitalOcean Spaces or S3 (required for private videos)',
+    descriptionHTML: 'Access Key ID for DigitalOcean Spaces or S3 (may be required for private videos)',
     private: true,
     default: ''
   })
@@ -202,7 +185,7 @@ Be concise but informative. If you mention a specific moment, include the timest
     name: 'spaces-secret-key',
     label: 'Spaces/S3 Secret Access Key',
     type: 'input-password',
-    descriptionHTML: 'Secret Access Key for DigitalOcean Spaces or S3 (required for private videos)',
+    descriptionHTML: 'Secret Access Key for DigitalOcean Spaces or S3 (may be required for private videos)',
     private: true,
     default: ''
   })
@@ -214,34 +197,6 @@ Be concise but informative. If you mention a specific moment, include the timest
     descriptionHTML: 'Region for DigitalOcean Spaces or S3 (e.g., nyc3, us-east-1)',
     private: false,
     default: 'nyc3'
-  })
-
-  // Object Storage Prefixes (if using subdirectories)
-  registerSetting({
-    name: 'spaces-streaming-prefix',
-    label: 'Streaming Prefix/Subdirectory',
-    type: 'input',
-    descriptionHTML: 'Prefix/subdirectory for streaming files (e.g., playlists)',
-    private: false,
-    default: ''
-  })
-
-  registerSetting({
-    name: 'spaces-videos-prefix',
-    label: 'Videos Prefix/Subdirectory',
-    type: 'input',
-    descriptionHTML: 'Prefix/subdirectory for video files (e.g., web-videos)',
-    private: false,
-    default: ''
-  })
-
-  registerSetting({
-    name: 'spaces-captions-prefix',
-    label: 'Captions Prefix/Subdirectory',
-    type: 'input',
-    descriptionHTML: 'Prefix/subdirectory for caption files (e.g., captions)',
-    private: false,
-    default: ''
   })
 }
 
@@ -260,6 +215,18 @@ function registerVideoHooks(registerHook) {
   registerHook({
     target: 'action:api.video.updated',
     handler: async ({ video }) => {
+      // Check if video was previously failed/pending and is now ready
+      const status = await videoProcessor.getProcessingStatus(video.uuid)
+
+      if (status?.status === 'error' || status?.status === 'pending') {
+        const fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+        if (videoProcessor.isVideoReady(fullVideo)) {
+          logger.info(`Video ${video.uuid} is now ready, retrying processing`)
+          await videoProcessor.queueVideoForProcessing(video)
+          return
+        }
+      }
+
       // Check if video has transcription available
       await videoProcessor.checkAndProcessTranscript(video)
     }

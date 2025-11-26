@@ -3,7 +3,6 @@ const fs = require('fs').promises
 const path = require('path')
 const openaiService = require('./openai-service')
 const databaseService = require('./database-service')
-const spacesService = require('./spaces-service')
 
 let logger = null
 let settingsManager = null
@@ -13,9 +12,6 @@ function initialize(services) {
   logger = services.logger
   settingsManager = services.settingsManager
   peertubeHelpers = services.peertubeHelpers
-
-  // Initialize spaces service
-  spacesService.initialize(services)
 
   // Log available helpers for debugging
   if (peertubeHelpers) {
@@ -27,16 +23,57 @@ function initialize(services) {
   }
 }
 
-async function queueVideoForProcessing(video) {
-  try {
-    // Add to processing queue using database service
-    await databaseService.addToProcessingQueue(video.uuid, video.id)
+// Check if video is ready for processing (transcoding complete)
+function isVideoReady(video) {
+  // PeerTube video states:
+  // 1 = PUBLISHED (ready)
+  // 2 = TO_TRANSCODE
+  // 3 = TO_IMPORT
+  // 4 = WAITING_FOR_LIVE
+  // 5 = LIVE_ENDED
+  // 6 = TO_MOVE_TO_EXTERNAL_STORAGE
+  // 7 = TRANSCODING_FAILED
+  // 8 = TO_EDIT
+  const READY_STATE = 1
+  const state = video.state?.id ?? video.state
+  return state === READY_STATE
+}
 
-    // Start processing in background
+async function queueVideoForProcessing(video, retryCount = 0) {
+  const MAX_RETRIES = 5
+  const RETRY_DELAYS = [30000, 60000, 120000, 300000, 600000] // 30s, 1m, 2m, 5m, 10m
+
+  try {
+    // Load full video data to check state
+    const fullVideo = await peertubeHelpers.videos.loadByIdOrUUID(video.uuid)
+
+    if (!isVideoReady(fullVideo)) {
+      if (retryCount < MAX_RETRIES) {
+        const delay = RETRY_DELAYS[retryCount]
+        const state = fullVideo.state?.id ?? fullVideo.state
+        logger.info(`Video ${video.uuid} not ready (state: ${state}), retrying in ${delay / 1000}s (attempt ${retryCount + 1}/${MAX_RETRIES})`)
+
+        // Schedule retry
+        setTimeout(() => {
+          queueVideoForProcessing(video, retryCount + 1)
+        }, delay)
+
+        // Update status to show waiting
+        await databaseService.addToProcessingQueue(video.uuid, video.id)
+        await databaseService.updateProcessingStatus(video.uuid, 'pending', `Waiting for transcoding (attempt ${retryCount + 1})`)
+        return
+      } else {
+        logger.warn(`Video ${video.uuid} still not ready after ${MAX_RETRIES} retries, giving up`)
+        await databaseService.updateProcessingStatus(video.uuid, 'error', 'Video transcoding did not complete in time')
+        return
+      }
+    }
+
+    // Video is ready, proceed with processing
+    await databaseService.addToProcessingQueue(video.uuid, video.id)
     processVideo(video).catch(err => {
       logger.error(`Error processing video ${video.uuid}:`, err)
     })
-
   } catch (error) {
     logger.error('Failed to queue video for processing:', error)
   }
@@ -228,14 +265,17 @@ async function extractVideoSnapshots(video) {
   // Create directory
   await fs.mkdir(snapshotsDir, { recursive: true })
 
-  // Get video file path - we'll construct it directly from the UUID
-  let videoPath
-  try {
-    logger.info(`Constructing video URL directly from UUID: ${fullVideo.uuid}`)
+  // Get video file path with retry logic for files that might not be ready yet
+  const MAX_FILE_RETRIES = 3
+  const FILE_RETRY_DELAY = 10000 // 10 seconds
+  let videoPath = null
+  let fileRetries = 0
 
-    // Use PeerTube's official getFiles() API to get video file URLs
-    // This returns the actual URLs with correct file UUIDs for object storage
+  while (!videoPath && fileRetries < MAX_FILE_RETRIES) {
     try {
+      logger.info(`Attempting to get video URL for ${fullVideo.uuid} (attempt ${fileRetries + 1}/${MAX_FILE_RETRIES})`)
+
+      // Use PeerTube's official getFiles() API to get video file URLs
       const filesData = await peertubeHelpers.videos.getFiles(fullVideo.id)
 
       // Prefer HLS files (streaming playlists)
@@ -263,17 +303,23 @@ async function extractVideoSnapshots(video) {
       logger.warn(`getFiles() failed: ${e.message}`)
     }
 
-    // If getFiles() didn't provide a URL, log error and return
+    // If no URL yet, wait and retry
     if (!videoPath) {
-      logger.error(`Failed to get video URL for ${fullVideo.uuid} via getFiles() - video may still be processing or files unavailable`)
-      return // Skip snapshot extraction but continue processing
+      fileRetries++
+      if (fileRetries < MAX_FILE_RETRIES) {
+        logger.info(`Files not available for ${fullVideo.uuid}, retrying in ${FILE_RETRY_DELAY / 1000}s (attempt ${fileRetries}/${MAX_FILE_RETRIES})`)
+        await new Promise(resolve => setTimeout(resolve, FILE_RETRY_DELAY))
+      }
     }
+  }
 
-    logger.info(`Video URL ready for processing: ${videoPath}`)
-  } catch (error) {
-    logger.error('Error while constructing video URL:', error)
+  // If still no URL after retries, skip snapshot extraction
+  if (!videoPath) {
+    logger.error(`Failed to get video URL for ${fullVideo.uuid} after ${MAX_FILE_RETRIES} attempts - files unavailable`)
     return // Skip snapshot extraction but continue processing
   }
+
+  logger.info(`Video URL ready for processing: ${videoPath}`)
 
   const duration = fullVideo.duration || video.duration
   const snapshots = []
@@ -389,9 +435,33 @@ async function processVideoTranscript(video) {
 
 async function getVideoTranscript(video) {
   try {
+    // DEBUG: Log available peertubeHelpers.videos methods
+    logger.info(`=== CAPTION DEBUG START for video ${video.uuid} ===`)
+    logger.info(`Available peertubeHelpers.videos methods: ${Object.keys(peertubeHelpers.videos || {}).join(', ')}`)
+
     // First, try to get captions through PeerTube's API
     let captionUrl = null
     let captionContent = null
+
+    // Try getCaptions helper if it exists (similar to getFiles)
+    try {
+      if (peertubeHelpers.videos.getCaptions) {
+        logger.info(`getCaptions method exists! Trying it...`)
+        const captionsData = await peertubeHelpers.videos.getCaptions(video.id)
+        logger.info(`getCaptions result: ${JSON.stringify(captionsData)}`)
+        if (captionsData?.length > 0) {
+          const caption = captionsData.find(c => c.language === 'en') || captionsData[0]
+          if (caption.url || caption.fileUrl) {
+            captionUrl = caption.url || caption.fileUrl
+            logger.info(`Got caption URL via getCaptions: ${captionUrl}`)
+          }
+        }
+      } else {
+        logger.info(`getCaptions method does NOT exist on peertubeHelpers.videos`)
+      }
+    } catch (e) {
+      logger.warn(`getCaptions failed: ${e.message}`)
+    }
 
     // Try to load full video details which might include caption information
     try {
@@ -426,15 +496,33 @@ async function getVideoTranscript(video) {
         logger.info(`Found VideoCaptions association with ${videoModel.VideoCaptions.length} captions`)
         for (const caption of videoModel.VideoCaptions) {
           const captionData = caption.dataValues || caption
-          logger.info(`Caption data: ${JSON.stringify(captionData)}`)
+          logger.info(`Caption object keys: ${Object.keys(caption).join(', ')}`)
+          logger.info(`Caption data keys: ${Object.keys(captionData).join(', ')}`)
+          logger.info(`Caption FULL data: ${JSON.stringify(captionData)}`)
 
-          // Try to find the caption URL
+          // Check if caption has any methods that might return URL
+          if (typeof caption.getFileUrl === 'function') {
+            logger.info(`caption.getFileUrl() exists!`)
+            try {
+              const url = await caption.getFileUrl()
+              logger.info(`caption.getFileUrl() returned: ${url}`)
+            } catch (e) {
+              logger.warn(`getFileUrl() failed: ${e.message}`)
+            }
+          }
+
+          // Try to find the caption URL from various properties
+          const possibleUrl = captionData.fileUrl || captionData.captionPath || captionData.url || captionData.filename
+          logger.info(`Possible URL properties - fileUrl: ${captionData.fileUrl}, captionPath: ${captionData.captionPath}, url: ${captionData.url}, filename: ${captionData.filename}`)
+
           if (captionData.fileUrl || captionData.captionPath) {
             captionUrl = captionData.fileUrl || captionData.captionPath
             logger.info(`Found caption URL from VideoCaptions: ${captionUrl}`)
             break
           }
         }
+      } else if (!captionUrl) {
+        logger.info(`No VideoCaptions association found on videoModel`)
       }
 
       // Also check trackerUrls, which might contain caption info
@@ -465,27 +553,8 @@ async function getVideoTranscript(video) {
       }
     }
 
-    // Try to construct caption URL from Spaces if not found
-    if (!captionUrl && video.uuid) {
-      // Get configured captions CDN URL and credentials
-      const spacesCaptionsUrl = await settingsManager.getSetting('spaces-captions-url')
-      const accessKey = await settingsManager.getSetting('spaces-access-key')
-      const secretKey = await settingsManager.getSetting('spaces-secret-key')
-
-      if (spacesCaptionsUrl) {
-        // If we have credentials, always use signed URLs
-        if (accessKey && secretKey) {
-          captionUrl = await spacesService.getSignedCaptionUrl(video.uuid, spacesCaptionsUrl)
-          logger.info(`Generated signed caption URL for video`)
-        } else {
-          // No credentials - use direct URL (will only work for public videos)
-          captionUrl = `${spacesCaptionsUrl}/captions${video.uuid}-en.vtt`
-          logger.info(`Using direct caption URL (public videos only): ${captionUrl}`)
-        }
-      } else {
-        logger.debug('No captions CDN URL configured in settings')
-      }
-    }
+    // Caption URL will be found via PeerTube API (getCaptions or VideoCaptions association)
+    // No manual URL construction needed - PeerTube provides the correct URLs
 
     // If we have a remote caption URL, fetch it
     if (captionUrl && (captionUrl.startsWith('http://') || captionUrl.startsWith('https://'))) {
@@ -696,5 +765,6 @@ module.exports = {
   processVideo,
   checkAndProcessTranscript,
   cleanupVideoData,
-  getProcessingStatus
+  getProcessingStatus,
+  isVideoReady
 }
