@@ -288,13 +288,17 @@ async function analyzeSnapshots(video, snapshots) {
 
 async function processVideoTranscript(video) {
   try {
+    logger.info(`Processing transcript for video ${video.uuid}`)
+
     // Get video captions/transcripts
     const transcriptData = await getVideoTranscript(video)
 
     if (!transcriptData) {
-      logger.info(`No transcript available for video ${video.uuid}`)
+      logger.info(`No transcript data returned for video ${video.uuid}`)
       return
     }
+
+    logger.info(`Got transcript data (${transcriptData.length} chars) for video ${video.uuid}`)
 
     // Parse transcript into chunks
     const chunks = parseTranscript(transcriptData)
@@ -317,6 +321,7 @@ async function processVideoTranscript(video) {
 
 async function getVideoTranscript(video) {
   try {
+    logger.info(`Looking for transcript for video ${video.uuid}`)
     let captionUrl = null
     let captionContent = null
 
@@ -338,17 +343,23 @@ async function getVideoTranscript(video) {
           captions = result.rows
         }
 
+        logger.info(`Caption query returned ${captions.length} caption(s) for video ${video.uuid}`)
+
         if (captions.length > 0) {
           // Prefer English
           const caption = captions.find(c => c.language === 'en') || captions[0]
           if (caption.fileUrl) {
             captionUrl = caption.fileUrl
-            logger.info(`Found caption for video ${video.uuid}: ${caption.language}`)
+            logger.info(`Found caption URL for video ${video.uuid}: ${caption.language}`)
+          } else {
+            logger.info(`Caption found but no fileUrl for video ${video.uuid}`)
           }
         }
       } catch (e) {
-        logger.debug(`Caption database query failed: ${e.message}`)
+        logger.warn(`Caption database query failed: ${e.message}`)
       }
+    } else {
+      logger.warn('Database query not available for caption lookup')
     }
 
     // If we have a remote caption URL, fetch it
@@ -555,7 +566,7 @@ async function checkAndProcessTranscript(video, retryCount = 0) {
       logger.info(`No transcript available for video ${video.uuid} after ${retryCount + 1} attempts`)
     }
   } else {
-    logger.debug(`Video ${video.uuid} already has ${embeddings.length} transcript embeddings`)
+    logger.info(`Video ${video.uuid} already has ${embeddings.length} transcript embeddings`)
   }
 }
 
