@@ -232,6 +232,18 @@ function registerVideoHooks(registerHook) {
     }
   })
 
+  // Hook into caption creation - this is when auto-generated transcripts are ready
+  registerHook({
+    target: 'action:api.video-caption.created',
+    handler: async ({ caption, video }) => {
+      logger.info(`Caption created for video ${video?.uuid}: language=${caption?.language}`)
+      if (video) {
+        // Process transcript now that caption is available
+        await videoProcessor.checkAndProcessTranscript(video)
+      }
+    }
+  })
+
   // Clean up when video is deleted
   registerHook({
     target: 'action:api.video.deleted',
