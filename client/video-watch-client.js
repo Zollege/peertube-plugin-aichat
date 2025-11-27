@@ -164,6 +164,31 @@ async function initializeAIChat(video, peertubeHelpers) {
   if (existingToggle) existingToggle.remove()
   if (existingOverlay) existingOverlay.remove()
 
+  // Check if video has been processed before showing chat
+  try {
+    const response = await fetch(peertubeHelpers.getBaseRouterRoute() + `/processing/status/${video.uuid}`, {
+      headers: {
+        ...peertubeHelpers.getAuthHeader()
+      }
+    })
+
+    if (response.ok) {
+      const status = await response.json()
+      // Only show chat if video has been processed successfully
+      if (!status.processed) {
+        console.log('[AI Chat] Video not processed, chat hidden')
+        return
+      }
+    } else {
+      // If we can't check status, don't show chat
+      console.log('[AI Chat] Could not check processing status, chat hidden')
+      return
+    }
+  } catch (error) {
+    console.error('[AI Chat] Error checking processing status:', error)
+    return
+  }
+
   // Create overlay for mobile
   const overlay = document.createElement('div')
   overlay.id = 'ai-chat-overlay'

@@ -17,6 +17,12 @@
       "scopes": [
         "video-watch"
       ]
+    },
+    {
+      "script": "dist/admin-plugin-client.js",
+      "scopes": [
+        "admin-plugin"
+      ]
     }
   ],
   "css": [

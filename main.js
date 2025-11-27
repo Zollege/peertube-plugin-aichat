@@ -114,7 +114,7 @@ async function registerSettings(registerSetting) {
     type: 'input-checkbox',
     descriptionHTML: 'Automatically process new videos when uploaded',
     private: false,
-    default: true
+    default: false
   })
 
   // Model selection (ordered by cost efficiency for vision)
@@ -330,6 +330,22 @@ function registerAPIRoutes(router) {
     } catch (error) {
       logger.error('Failed to trigger processing:', error)
       res.status(500).json({ error: 'Failed to trigger processing' })
+    }
+  })
+
+  // List all processed videos (admin only)
+  router.get('/processing/list', async (req, res) => {
+    try {
+      const user = await peertubeHelpers.user.getAuthUser(res)
+      if (!user || user.role !== 0) {
+        return res.status(403).json({ error: 'Admin access required' })
+      }
+
+      const processedVideos = await databaseService.getAllProcessedVideos()
+      res.json(processedVideos)
+    } catch (error) {
+      logger.error('Failed to get processed videos list:', error)
+      res.status(500).json({ error: 'Failed to get processed videos list' })
     }
   })
 }

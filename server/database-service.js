@@ -430,6 +430,43 @@ async function trackAPIUsage(userId, endpoint, tokensUsed, cost = 0) {
   }
 }
 
+// Get all processed videos with their stats
+async function getAllProcessedVideos() {
+  if (!isConnected) {
+    return []
+  }
+
+  try {
+    const result = await dbClient.query(`
+      SELECT
+        pq.video_uuid,
+        pq.video_id,
+        pq.status,
+        pq.error_message,
+        pq.created_at,
+        pq.processed_at,
+        (SELECT COUNT(*) FROM plugin_ai_video_embeddings e WHERE e.video_uuid = pq.video_uuid) as embedding_count,
+        (SELECT COUNT(*) FROM plugin_ai_video_snapshots s WHERE s.video_uuid = pq.video_uuid) as snapshot_count
+      FROM plugin_ai_processing_queue pq
+      ORDER BY pq.created_at DESC
+    `)
+
+    return result.rows.map(row => ({
+      videoUuid: row.video_uuid,
+      videoId: row.video_id,
+      status: row.status,
+      errorMessage: row.error_message,
+      createdAt: row.created_at,
+      processedAt: row.processed_at,
+      embeddingCount: parseInt(row.embedding_count) || 0,
+      snapshotCount: parseInt(row.snapshot_count) || 0
+    }))
+  } catch (error) {
+    logger.error('Error getting processed videos:', error)
+    return []
+  }
+}
+
 // Cleanup functions
 async function cleanupVideoData(videoUuid) {
   logger.info(`Cleaning up data for video ${videoUuid}`)
@@ -671,5 +708,6 @@ module.exports = {
   getProcessingStatus,
   trackAPIUsage,
   cleanupVideoData,
+  getAllProcessedVideos,
   isConnected: () => isConnected
 }

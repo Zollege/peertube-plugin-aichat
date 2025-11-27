@@ -3,7 +3,8 @@ const esbuild = require('esbuild')
 
 const clientFiles = [
   'common-client-plugin.js',
-  'video-watch-client.js'
+  'video-watch-client.js',
+  'admin-plugin-client.js'
 ]
 
 const configs = clientFiles.map(f => ({
