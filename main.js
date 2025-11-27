@@ -348,6 +348,23 @@ function registerAPIRoutes(router) {
       res.status(500).json({ error: 'Failed to get processed videos list' })
     }
   })
+
+  // Clear video embeddings/data (admin only)
+  router.delete('/processing/:videoUuid', async (req, res) => {
+    try {
+      const user = await peertubeHelpers.user.getAuthUser(res)
+      if (!user || user.role !== 0) {
+        return res.status(403).json({ error: 'Admin access required' })
+      }
+
+      const { videoUuid } = req.params
+      await databaseService.cleanupVideoData(videoUuid)
+      res.json({ message: 'Video data cleared successfully' })
+    } catch (error) {
+      logger.error('Failed to clear video data:', error)
+      res.status(500).json({ error: 'Failed to clear video data' })
+    }
+  })
 }
 
 module.exports = {

@@ -28,11 +28,12 @@ function register({ registerHook, peertubeHelpers }) {
         <table id="aichat-videos-table" style="display: none; width: 100%; border-collapse: collapse; margin-top: 10px;">
           <thead>
             <tr style="background: #333;">
-              <th style="padding: 10px; text-align: left; border: 1px solid #444;">Video UUID</th>
-              <th style="padding: 10px; text-align: left; border: 1px solid #444;">Status</th>
-              <th style="padding: 10px; text-align: center; border: 1px solid #444;">Transcripts</th>
-              <th style="padding: 10px; text-align: center; border: 1px solid #444;">Snapshots</th>
-              <th style="padding: 10px; text-align: left; border: 1px solid #444;">Processed At</th>
+              <th style="padding: 10px; text-align: left; border: 1px solid #444; color: white;">Video</th>
+              <th style="padding: 10px; text-align: left; border: 1px solid #444; color: white;">Status</th>
+              <th style="padding: 10px; text-align: center; border: 1px solid #444; color: white;">Transcripts</th>
+              <th style="padding: 10px; text-align: center; border: 1px solid #444; color: white;">Snapshots</th>
+              <th style="padding: 10px; text-align: left; border: 1px solid #444; color: white;">Processed At</th>
+              <th style="padding: 10px; text-align: center; border: 1px solid #444; color: white;">Actions</th>
             </tr>
           </thead>
           <tbody id="aichat-videos-tbody">
@@ -42,9 +43,39 @@ function register({ registerHook, peertubeHelpers }) {
       `
       settingsContainer.appendChild(tableContainer)
 
+      const baseUrl = peertubeHelpers.getBaseRouterRoute()
+
+      // Function to clear video data
+      async function clearVideoData(videoUuid, row) {
+        if (!confirm('Are you sure you want to clear all AI data for this video? This cannot be undone.')) {
+          return
+        }
+
+        try {
+          const response = await fetch(`${baseUrl}/processing/${videoUuid}`, {
+            method: 'DELETE',
+            headers: peertubeHelpers.getAuthHeader()
+          })
+
+          if (response.ok) {
+            row.remove()
+            // Check if table is empty
+            const tbody = document.getElementById('aichat-videos-tbody')
+            if (tbody && tbody.children.length === 0) {
+              document.getElementById('aichat-videos-table').style.display = 'none'
+              document.getElementById('aichat-no-videos').style.display = 'block'
+            }
+          } else {
+            alert('Failed to clear video data')
+          }
+        } catch (error) {
+          console.error('Error clearing video data:', error)
+          alert('Error clearing video data')
+        }
+      }
+
       // Fetch processed videos
       try {
-        const baseUrl = peertubeHelpers.getBaseRouterRoute()
         const response = await fetch(`${baseUrl}/processing/list`, {
           headers: peertubeHelpers.getAuthHeader()
         })
@@ -68,10 +99,11 @@ function register({ registerHook, peertubeHelpers }) {
 
           videos.forEach(video => {
             const row = document.createElement('tr')
+            const displayName = video.videoName || video.videoUuid.substring(0, 8) + '...'
             row.innerHTML = `
               <td style="padding: 8px; border: 1px solid #444;">
                 <a href="/w/${video.videoUuid}" target="_blank" style="color: #00a0d2;">
-                  ${video.videoUuid.substring(0, 8)}...
+                  ${displayName}
                 </a>
               </td>
               <td style="padding: 8px; border: 1px solid #444;">
@@ -79,6 +111,7 @@ function register({ registerHook, peertubeHelpers }) {
                   padding: 2px 8px;
                   border-radius: 4px;
                   font-size: 12px;
+                  color: white;
                   background: ${video.status === 'completed' ? '#2d5a2d' : video.status === 'processing' ? '#5a4a2d' : video.status === 'error' ? '#5a2d2d' : '#444'};
                 ">${video.status}</span>
               </td>
@@ -91,7 +124,23 @@ function register({ registerHook, peertubeHelpers }) {
               <td style="padding: 8px; border: 1px solid #444;">
                 ${video.processedAt ? new Date(video.processedAt).toLocaleString() : '-'}
               </td>
+              <td style="padding: 8px; border: 1px solid #444; text-align: center;">
+                <button class="aichat-clear-btn" style="
+                  background: #5a2d2d;
+                  color: white;
+                  border: none;
+                  padding: 4px 8px;
+                  border-radius: 4px;
+                  cursor: pointer;
+                  font-size: 12px;
+                ">Clear</button>
+              </td>
             `
+
+            // Add click handler for clear button
+            const clearBtn = row.querySelector('.aichat-clear-btn')
+            clearBtn.addEventListener('click', () => clearVideoData(video.videoUuid, row))
+
             tbodyEl.appendChild(row)
           })
         }

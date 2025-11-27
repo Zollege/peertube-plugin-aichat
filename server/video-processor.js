@@ -67,7 +67,7 @@ async function queueVideoForProcessing(video, retryCount = 0) {
         }, delay)
 
         // Update status to show waiting
-        await databaseService.addToProcessingQueue(video.uuid, video.id)
+        await databaseService.addToProcessingQueue(video.uuid, video.id, fullVideo.name || video.name)
         await databaseService.updateProcessingStatus(video.uuid, 'pending', `Waiting for transcoding (attempt ${retryCount + 1})`)
         return
       } else {
@@ -78,7 +78,7 @@ async function queueVideoForProcessing(video, retryCount = 0) {
     }
 
     // Video is ready, proceed with processing
-    await databaseService.addToProcessingQueue(video.uuid, video.id)
+    await databaseService.addToProcessingQueue(video.uuid, video.id, fullVideo.name || video.name)
     processVideo(video).catch(err => {
       logger.error(`Error processing video ${video.uuid}:`, err)
     })

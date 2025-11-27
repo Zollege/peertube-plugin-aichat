@@ -114,12 +114,19 @@ async function createTables() {
         id SERIAL PRIMARY KEY,
         video_id INTEGER NOT NULL,
         video_uuid VARCHAR(255) NOT NULL,
+        video_name VARCHAR(500),
         status VARCHAR(50) DEFAULT 'pending',
         error_message TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         processed_at TIMESTAMP,
         UNIQUE(video_uuid)
       )
+    `)
+
+    // Add video_name column if it doesn't exist (for existing installations)
+    await dbClient.query(`
+      ALTER TABLE plugin_ai_processing_queue
+      ADD COLUMN IF NOT EXISTS video_name VARCHAR(500)
     `)
 
     // API usage table
@@ -347,7 +354,7 @@ async function getChatHistory(videoId, userId = null) {
 }
 
 // Processing queue functions
-async function addToProcessingQueue(videoUuid, videoId) {
+async function addToProcessingQueue(videoUuid, videoId, videoName = null) {
   if (!isConnected) {
     return await addToProcessingQueueFallback(videoUuid, videoId)
   }
@@ -355,10 +362,10 @@ async function addToProcessingQueue(videoUuid, videoId) {
   try {
     await dbClient.query(`
       INSERT INTO plugin_ai_processing_queue
-        (video_id, video_uuid, status)
-      VALUES ($1, $2, 'pending')
-      ON CONFLICT (video_uuid) DO NOTHING
-    `, [videoId, videoUuid])
+        (video_id, video_uuid, video_name, status)
+      VALUES ($1, $2, $3, 'pending')
+      ON CONFLICT (video_uuid) DO UPDATE SET video_name = COALESCE(EXCLUDED.video_name, plugin_ai_processing_queue.video_name)
+    `, [videoId, videoUuid, videoName])
   } catch (error) {
     logger.error('Error adding to queue:', error)
   }
@@ -441,6 +448,7 @@ async function getAllProcessedVideos() {
       SELECT
         pq.video_uuid,
         pq.video_id,
+        pq.video_name,
         pq.status,
         pq.error_message,
         pq.created_at,
@@ -454,6 +462,7 @@ async function getAllProcessedVideos() {
     return result.rows.map(row => ({
       videoUuid: row.video_uuid,
       videoId: row.video_id,
+      videoName: row.video_name,
       status: row.status,
       errorMessage: row.error_message,
       createdAt: row.created_at,
