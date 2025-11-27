@@ -12,6 +12,19 @@ const logger = {
   debug: (msg, meta) => rawLogger?.debug(msg, { tags: ['aichat'], ...meta })
 }
 
+// Helper to get the correct token limit parameter based on model
+// Newer models (gpt-4o, gpt-4.1, gpt-5, o1, o3) use max_completion_tokens
+// Older models (gpt-4, gpt-4-turbo, gpt-3.5) use max_tokens
+function getTokenParams(model, tokens) {
+  const newModelPrefixes = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3']
+  const usesNewParam = newModelPrefixes.some(prefix => model.startsWith(prefix))
+
+  if (usesNewParam) {
+    return { max_completion_tokens: tokens }
+  }
+  return { max_tokens: tokens }
+}
+
 async function initialize(services) {
   rawLogger = services.logger
   settingsManager = services.settingsManager
@@ -73,7 +86,7 @@ async function analyzeImage(base64Image, prompt) {
         ]
       }
     ],
-    max_tokens: 150
+    ...getTokenParams(model, 150)
   })
 
   return response.choices[0].message.content
@@ -98,11 +111,12 @@ async function generateChatResponse(systemPrompt, userMessage, context, model, m
   // Add current user message
   messages.push({ role: 'user', content: userMessage })
 
+  const selectedModel = model || 'gpt-4'
   const completion = await openaiClient.chat.completions.create({
-    model: model || 'gpt-4',
+    model: selectedModel,
     messages: messages,
-    max_tokens: maxTokens || 1000,
-    temperature: 0.7
+    temperature: 0.7,
+    ...getTokenParams(selectedModel, maxTokens || 1000)
   })
 
   return {
