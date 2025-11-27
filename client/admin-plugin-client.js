@@ -10,7 +10,7 @@ function register({ registerHook, peertubeHelpers }) {
       // Wait a bit for the DOM to be ready
       await new Promise(resolve => setTimeout(resolve, 500))
 
-      const settingsContainer = document.querySelector('.admin-plugin-settings')
+      const settingsContainer = document.querySelector('my-plugin-show-installed')
       console.log('[AI Chat Admin] Settings container:', settingsContainer)
 
       if (!settingsContainer) {
