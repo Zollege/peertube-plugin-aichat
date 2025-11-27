@@ -123,11 +123,13 @@ async function registerSettings(registerSetting) {
     label: 'OpenAI Model',
     type: 'select',
     options: [
-      { label: 'GPT-4.1-nano (Most cost-efficient)', value: 'gpt-4.1-nano' },
-      { label: 'GPT-4.1-mini (Very cost-efficient)', value: 'gpt-4.1-mini' },
+      { label: 'GPT-5-nano (Most cost-efficient)', value: 'gpt-5-nano' },
+      { label: 'GPT-5-mini (Very cost-efficient)', value: 'gpt-5-mini' },
+      { label: 'GPT-4.1-nano', value: 'gpt-4.1-nano' },
+      { label: 'GPT-4.1-mini', value: 'gpt-4.1-mini' },
       { label: 'GPT-4o-mini (Legacy mini)', value: 'gpt-4o-mini' },
-      { label: 'GPT-4.1 (Latest balanced)', value: 'gpt-4.1' },
-      { label: 'GPT-4o (Legacy balanced)', value: 'gpt-4o' },
+      { label: 'GPT-4.1', value: 'gpt-4.1' },
+      { label: 'GPT-4o (Legacy)', value: 'gpt-4o' },
       { label: 'GPT-4 Turbo', value: 'gpt-4-turbo' },
       { label: 'GPT-4', value: 'gpt-4' }
     ],

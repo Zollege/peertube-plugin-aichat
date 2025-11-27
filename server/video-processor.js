@@ -94,12 +94,12 @@ async function processVideo(video) {
     // Update status to processing
     await databaseService.updateProcessingStatus(video.uuid, 'processing')
 
-    // Process snapshots
-    await extractVideoSnapshots(video)
-
-    // Process transcript with retry logic
+    // Process transcript first (faster than snapshots)
     // This will schedule retries if transcript isn't available yet (auto-generation in progress)
     await checkAndProcessTranscript(video)
+
+    // Process snapshots (can take a while with many frames)
+    await extractVideoSnapshots(video)
 
     // Update status to completed
     await databaseService.updateProcessingStatus(video.uuid, 'completed')
