@@ -1,8 +1,23 @@
-async function register({ registerSettingsScript, peertubeHelpers }) {
-  registerSettingsScript({
-    isSettingHidden: () => false,
+function register({ registerHook, peertubeHelpers }) {
+  console.log('[AI Chat Admin] Script loaded')
 
-    async onSettingsLoaded({ settings, settingsContainer }) {
+  registerHook({
+    target: 'action:admin-plugin-settings.init',
+    handler: async ({ npmName }) => {
+      console.log('[AI Chat Admin] Settings init for:', npmName)
+      if (npmName !== 'peertube-plugin-aichat') return
+
+      // Wait a bit for the DOM to be ready
+      await new Promise(resolve => setTimeout(resolve, 500))
+
+      const settingsContainer = document.querySelector('.admin-plugin-settings')
+      console.log('[AI Chat Admin] Settings container:', settingsContainer)
+
+      if (!settingsContainer) {
+        console.error('[AI Chat Admin] Could not find settings container')
+        return
+      }
+
       // Create a container for the processed videos table
       const tableContainer = document.createElement('div')
       tableContainer.id = 'aichat-processed-videos'
