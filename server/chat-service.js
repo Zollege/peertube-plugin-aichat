@@ -173,12 +173,12 @@ async function generateChatResponse(message, context, videoId, videoUuid, userId
     contextMessage += '\n'
   }
 
-  // Add related videos for recommendations
+  // Add related videos for recommendations (with UUIDs for linking)
   if (context?.relatedVideos?.length > 0) {
-    contextMessage += 'OTHER AVAILABLE VIDEOS (for recommendations):\n'
+    contextMessage += 'OTHER AVAILABLE VIDEOS (use format [video:UUID] to create links):\n'
     context.relatedVideos.forEach(video => {
       const desc = video.description ? `: ${video.description.slice(0, 100)}...` : ''
-      contextMessage += `- "${video.name}" by ${video.channel_name || 'Unknown'}${desc}\n`
+      contextMessage += `- "${video.name}" [video:${video.uuid}] by ${video.channel_name || 'Unknown'}${desc}\n`
     })
     contextMessage += '\n'
   }
@@ -211,6 +211,9 @@ async function generateChatResponse(message, context, videoId, videoUuid, userId
   // Extract timestamps from response
   const timestamps = extractTimestamps(responseContent)
 
+  // Extract video links from response
+  const videoLinks = extractVideoLinks(responseContent, context?.relatedVideos || [])
+
   // Save to chat history
   await databaseService.saveChatMessage(videoId, videoUuid, userId, message, responseContent)
 
@@ -221,7 +224,8 @@ async function generateChatResponse(message, context, videoId, videoUuid, userId
 
   return {
     response: responseContent,
-    timestamps
+    timestamps,
+    videoLinks
   }
 }
 
@@ -246,27 +250,71 @@ function formatTime(seconds) {
 
 function extractTimestamps(text) {
   const timestamps = []
-  const regex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g
+
+  // Match both single timestamps [0:00] and ranges [0:00-0:32]
+  const regex = /\[(\d{1,2}:\d{2}(?::\d{2})?(?:-\d{1,2}:\d{2}(?::\d{2})?)?)\]/g
   let match
 
   while ((match = regex.exec(text)) !== null) {
     const timeStr = match[1]
-    const parts = timeStr.split(':')
-    let seconds = 0
 
-    if (parts.length === 3) {
-      seconds = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2])
-    } else if (parts.length === 2) {
-      seconds = parseInt(parts[0]) * 60 + parseInt(parts[1])
+    // Check if it's a range (contains a hyphen)
+    if (timeStr.includes('-')) {
+      const [startTime, endTime] = timeStr.split('-')
+      const startSeconds = parseTimeToSeconds(startTime)
+      const endSeconds = parseTimeToSeconds(endTime)
+
+      timestamps.push({
+        display: match[0],
+        seconds: startSeconds,
+        endSeconds: endSeconds,
+        isRange: true
+      })
+    } else {
+      timestamps.push({
+        display: match[0],
+        seconds: parseTimeToSeconds(timeStr),
+        isRange: false
+      })
     }
-
-    timestamps.push({
-      display: match[0],
-      seconds: seconds
-    })
   }
 
   return timestamps
+}
+
+function parseTimeToSeconds(timeStr) {
+  const parts = timeStr.split(':')
+  let seconds = 0
+
+  if (parts.length === 3) {
+    seconds = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2])
+  } else if (parts.length === 2) {
+    seconds = parseInt(parts[0]) * 60 + parseInt(parts[1])
+  }
+
+  return seconds
+}
+
+function extractVideoLinks(text, relatedVideos) {
+  const videoLinks = []
+  // Match [video:UUID] format
+  const regex = /\[video:([a-f0-9-]+)\]/gi
+  let match
+
+  while ((match = regex.exec(text)) !== null) {
+    const uuid = match[1]
+    // Find video name from related videos
+    const video = relatedVideos.find(v => v.uuid === uuid)
+
+    videoLinks.push({
+      display: match[0],
+      uuid: uuid,
+      name: video?.name || 'Video',
+      url: `/w/${uuid}`
+    })
+  }
+
+  return videoLinks
 }
 
 module.exports = {

@@ -333,7 +333,7 @@ function initializeChatHandlers(video, peertubeHelpers) {
 
       // Remove loading and add response
       removeMessage(loadingId)
-      addMessageToChat('assistant', data.response, false, data.timestamps)
+      addMessageToChat('assistant', data.response, false, data.timestamps, data.videoLinks)
 
     } catch (error) {
       console.error('Error sending message:', error)
@@ -357,7 +357,7 @@ function initializeChatHandlers(video, peertubeHelpers) {
   })
 }
 
-function addMessageToChat(role, content, isLoading = false, timestamps = []) {
+function addMessageToChat(role, content, isLoading = false, timestamps = [], videoLinks = []) {
   const messagesContainer = document.getElementById('ai-chat-messages')
   const messageId = `msg-${Date.now()}-${Math.random()}`
 
@@ -380,6 +380,14 @@ function addMessageToChat(role, content, isLoading = false, timestamps = []) {
       timestamps.forEach(ts => {
         const link = `<a href="#" class="timestamp-link" data-time="${ts.seconds}">${ts.display}</a>`
         processedContent = processedContent.replace(ts.display, link)
+      })
+    }
+
+    // Process content for video links
+    if (videoLinks && videoLinks.length > 0) {
+      videoLinks.forEach(vl => {
+        const link = `<a href="${vl.url}" class="video-link" target="_blank">${vl.name}</a>`
+        processedContent = processedContent.replace(vl.display, link)
       })
     }
 

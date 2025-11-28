@@ -425,10 +425,28 @@
   background: rgba(var(--mainColorRGB, 226, 50, 50), 0.1);
   transition: all 0.2s;
   display: inline-block;
+  cursor: pointer;
 }
 
 .timestamp-link:hover {
   background: rgba(var(--mainColorRGB, 226, 50, 50), 0.2);
+  text-decoration: underline;
+}
+
+/* Video Links */
+.video-link {
+  color: #00a0d2;
+  text-decoration: none;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 160, 210, 0.1);
+  transition: all 0.2s;
+  display: inline-block;
+}
+
+.video-link:hover {
+  background: rgba(0, 160, 210, 0.2);
   text-decoration: underline;
 }
 
