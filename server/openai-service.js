@@ -12,17 +12,32 @@ const logger = {
   debug: (msg, meta) => rawLogger?.debug(msg, { tags: ['aichat'], ...meta })
 }
 
-// Helper to get the correct token limit parameter based on model
+// Helper to get model-specific parameters
 // Newer models (gpt-4o, gpt-4.1, gpt-5, o1, o3) use max_completion_tokens
 // Older models (gpt-4, gpt-4-turbo, gpt-3.5) use max_tokens
-function getTokenParams(model, tokens) {
-  const newModelPrefixes = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3']
-  const usesNewParam = newModelPrefixes.some(prefix => model.startsWith(prefix))
+// Reasoning models (o1, o3) don't support temperature
+function getModelParams(model, tokens, temperature = 0.7) {
+  const newTokenPrefixes = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3']
+  const reasoningPrefixes = ['o1', 'o3']
 
-  if (usesNewParam) {
-    return { max_completion_tokens: tokens }
+  const usesNewTokenParam = newTokenPrefixes.some(prefix => model.startsWith(prefix))
+  const isReasoningModel = reasoningPrefixes.some(prefix => model.startsWith(prefix))
+
+  const params = {}
+
+  // Token parameter
+  if (usesNewTokenParam) {
+    params.max_completion_tokens = tokens
+  } else {
+    params.max_tokens = tokens
   }
-  return { max_tokens: tokens }
+
+  // Temperature (not supported by reasoning models)
+  if (!isReasoningModel) {
+    params.temperature = temperature
+  }
+
+  return params
 }
 
 async function initialize(services) {
@@ -86,7 +101,7 @@ async function analyzeImage(base64Image, prompt) {
         ]
       }
     ],
-    ...getTokenParams(model, 150)
+    ...getModelParams(model, 150)
   })
 
   return response.choices[0].message.content
@@ -115,8 +130,7 @@ async function generateChatResponse(systemPrompt, userMessage, context, model, m
   const completion = await openaiClient.chat.completions.create({
     model: selectedModel,
     messages: messages,
-    temperature: 0.7,
-    ...getTokenParams(selectedModel, maxTokens || 1000)
+    ...getModelParams(selectedModel, maxTokens || 1000, 0.7)
   })
 
   return {
