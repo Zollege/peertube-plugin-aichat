@@ -15,25 +15,28 @@ const logger = {
 // Helper to get model-specific parameters
 // Newer models (gpt-4o, gpt-4.1, gpt-5, o1, o3) use max_completion_tokens
 // Older models (gpt-4, gpt-4-turbo, gpt-3.5) use max_tokens
-// Some models (o1, o3, gpt-5) don't support custom temperature
+// Reasoning models (o1, o3, gpt-5) don't support custom temperature
+// Reasoning models need MORE tokens because they use "reasoning tokens" internally
 function getModelParams(model, tokens, temperature = 0.7) {
   const newTokenPrefixes = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3']
-  const noTemperaturePrefixes = ['o1', 'o3', 'gpt-5']
+  const reasoningModelPrefixes = ['o1', 'o3', 'gpt-5']
 
   const usesNewTokenParam = newTokenPrefixes.some(prefix => model.startsWith(prefix))
-  const noTemperatureSupport = noTemperaturePrefixes.some(prefix => model.startsWith(prefix))
+  const isReasoningModel = reasoningModelPrefixes.some(prefix => model.startsWith(prefix))
 
   const params = {}
 
-  // Token parameter
+  // Token parameter - reasoning models need significantly more tokens
+  // because they use internal "reasoning tokens" that count against the limit
   if (usesNewTokenParam) {
-    params.max_completion_tokens = tokens
+    // Reasoning models need ~4x more tokens to have room for actual response
+    params.max_completion_tokens = isReasoningModel ? Math.max(tokens * 4, 4000) : tokens
   } else {
     params.max_tokens = tokens
   }
 
-  // Temperature (not supported by reasoning models and gpt-5)
-  if (!noTemperatureSupport) {
+  // Temperature (not supported by reasoning models)
+  if (!isReasoningModel) {
     params.temperature = temperature
   }
 
