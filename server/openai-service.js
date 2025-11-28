@@ -127,14 +127,30 @@ async function generateChatResponse(systemPrompt, userMessage, context, model, m
   messages.push({ role: 'user', content: userMessage })
 
   const selectedModel = model || 'gpt-4'
+  const modelParams = getModelParams(selectedModel, maxTokens || 1000, 0.7)
+
+  logger.info(`Calling OpenAI with model: ${selectedModel}`)
+  logger.info(`Messages count: ${messages.length}, params: ${JSON.stringify(modelParams)}`)
+
   const completion = await openaiClient.chat.completions.create({
     model: selectedModel,
     messages: messages,
-    ...getModelParams(selectedModel, maxTokens || 1000, 0.7)
+    ...modelParams
   })
 
+  logger.info(`OpenAI response received, choices: ${completion.choices?.length}`)
+
+  const content = completion.choices[0]?.message?.content || ''
+
+  if (!content) {
+    logger.warn('OpenAI returned empty content')
+    logger.warn(`Full response: ${JSON.stringify(completion)?.slice(0, 500)}`)
+  } else {
+    logger.info(`Response content (truncated): ${content.slice(0, 100)}...`)
+  }
+
   return {
-    content: completion.choices[0].message.content,
+    content: content,
     usage: completion.usage
   }
 }

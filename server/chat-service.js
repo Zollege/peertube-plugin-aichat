@@ -192,6 +192,9 @@ async function generateChatResponse(message, context, videoId, videoUuid, userId
   const recentHistory = history.slice(-20).reverse()
 
   // Generate response using OpenAI with conversation history
+  logger.info(`Calling OpenAI for chat, model: ${model}, maxTokens: ${maxTokens}`)
+  logger.info(`Context: transcripts=${context?.transcriptChunks?.length || 0}, snapshots=${context?.snapshots?.length || 0}, related=${context?.relatedVideos?.length || 0}`)
+
   const aiResponse = await openaiService.generateChatResponse(
     systemPrompt,
     fullUserMessage,
@@ -200,6 +203,8 @@ async function generateChatResponse(message, context, videoId, videoUuid, userId
     maxTokens,
     recentHistory
   )
+
+  logger.info(`AI response received, content length: ${aiResponse?.content?.length || 0}`)
 
   const responseContent = aiResponse.content
 
