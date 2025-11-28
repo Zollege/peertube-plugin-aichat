@@ -15,13 +15,13 @@ const logger = {
 // Helper to get model-specific parameters
 // Newer models (gpt-4o, gpt-4.1, gpt-5, o1, o3) use max_completion_tokens
 // Older models (gpt-4, gpt-4-turbo, gpt-3.5) use max_tokens
-// Reasoning models (o1, o3) don't support temperature
+// Some models (o1, o3, gpt-5) don't support custom temperature
 function getModelParams(model, tokens, temperature = 0.7) {
   const newTokenPrefixes = ['gpt-4o', 'gpt-4.1', 'gpt-5', 'o1', 'o3']
-  const reasoningPrefixes = ['o1', 'o3']
+  const noTemperaturePrefixes = ['o1', 'o3', 'gpt-5']
 
   const usesNewTokenParam = newTokenPrefixes.some(prefix => model.startsWith(prefix))
-  const isReasoningModel = reasoningPrefixes.some(prefix => model.startsWith(prefix))
+  const noTemperatureSupport = noTemperaturePrefixes.some(prefix => model.startsWith(prefix))
 
   const params = {}
 
@@ -32,8 +32,8 @@ function getModelParams(model, tokens, temperature = 0.7) {
     params.max_tokens = tokens
   }
 
-  // Temperature (not supported by reasoning models)
-  if (!isReasoningModel) {
+  // Temperature (not supported by reasoning models and gpt-5)
+  if (!noTemperatureSupport) {
     params.temperature = temperature
   }
 
