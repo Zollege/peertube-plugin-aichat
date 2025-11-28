@@ -476,6 +476,35 @@ async function getAllProcessedVideos() {
   }
 }
 
+// Get processed videos for recommendations (excluding current video)
+async function getProcessedVideosForRecommendation(excludeVideoUuid, limit = 10) {
+  if (!isConnected) {
+    return []
+  }
+
+  try {
+    const result = await dbClient.query(`
+      SELECT
+        pq.video_uuid,
+        pq.video_name
+      FROM plugin_ai_processing_queue pq
+      WHERE pq.status = 'completed'
+        AND pq.video_uuid != $1
+        AND pq.video_name IS NOT NULL
+      ORDER BY pq.processed_at DESC
+      LIMIT $2
+    `, [excludeVideoUuid, limit])
+
+    return result.rows.map(row => ({
+      uuid: row.video_uuid,
+      name: row.video_name
+    }))
+  } catch (error) {
+    logger.error('Error getting processed videos for recommendation:', error)
+    return []
+  }
+}
+
 // Cleanup functions
 async function cleanupVideoData(videoUuid) {
   logger.info(`Cleaning up data for video ${videoUuid}`)
@@ -718,5 +747,6 @@ module.exports = {
   trackAPIUsage,
   cleanupVideoData,
   getAllProcessedVideos,
+  getProcessedVideosForRecommendation,
   isConnected: () => isConnected
 }

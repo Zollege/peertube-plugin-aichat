@@ -94,36 +94,11 @@ async function getVideoContext(videoUuid, query) {
 
 async function getRelatedVideos(currentVideoUuid, limit = 10) {
   try {
-    // Use PeerTube's database helper to query other public videos
-    if (peertubeHelpers.database?.query) {
-      const result = await peertubeHelpers.database.query(`
-        SELECT v.uuid, v.name, v.description, vc.name as channel_name
-        FROM video v
-        JOIN "videoChannel" vc ON v."channelId" = vc.id
-        WHERE v.uuid != $1
-          AND v.state = 1
-          AND v.privacy = 1
-        ORDER BY v."publishedAt" DESC
-        LIMIT $2
-      `, { bind: [currentVideoUuid, limit] })
+    // Get other AI-processed videos from our database
+    const processedVideos = await databaseService.getProcessedVideosForRecommendation(currentVideoUuid, limit)
 
-      // Debug: Log the result structure
-      logger.info(`getRelatedVideos raw result type: ${typeof result}`)
-      logger.info(`getRelatedVideos raw result: ${JSON.stringify(result)?.slice(0, 500)}`)
-
-      // Handle different result formats from PeerTube's query helper
-      let videos = []
-      if (Array.isArray(result)) {
-        // Result might be [rows, metadata] from Sequelize
-        videos = Array.isArray(result[0]) ? result[0] : result
-      } else if (result?.rows) {
-        videos = result.rows
-      }
-
-      logger.info(`getRelatedVideos returning ${videos.length} videos`)
-      return videos
-    }
-    return []
+    logger.info(`getRelatedVideos returning ${processedVideos.length} processed videos`)
+    return processedVideos
   } catch (error) {
     logger.warn('Failed to get related videos:', error.message)
     return []
@@ -177,8 +152,7 @@ async function generateChatResponse(message, context, videoId, videoUuid, userId
   if (context?.relatedVideos?.length > 0) {
     contextMessage += 'OTHER AVAILABLE VIDEOS (use format [video:UUID] to create links):\n'
     context.relatedVideos.forEach(video => {
-      const desc = video.description ? `: ${video.description.slice(0, 100)}...` : ''
-      contextMessage += `- "${video.name}" [video:${video.uuid}] by ${video.channel_name || 'Unknown'}${desc}\n`
+      contextMessage += `- "${video.name}" [video:${video.uuid}]\n`
     })
     contextMessage += '\n'
   }
